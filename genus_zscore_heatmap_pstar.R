@@ -9,7 +9,7 @@ write.table(zscore,"genus_z_score.txt",quote = F,sep = "\t",col.names = NA) #设
 dt = read.table("genus_z_score.txt", header=TRUE, sep="\t", comment.char = "", check.names = F, row.names=1)
 #读取注释文件，这个文件也是需要提前处理好，用来表示显著性差异的
 temp = read.table("HC_CHF_AHF_genus_annotation_qvalue.txt", sep = "\t", header = TRUE, row.names = 1, comment.char = "", check.names = F)
-#这个文件也是需要提前处理好，用来表示丰度趋势的
+#这个文件也是需要提前处理好，代表pch的数字代码，用来表示丰度趋势的
 trend <- read.table("HC_CHF_AHF_genus_annotation_profile1.txt", sep = "\t", header = TRUE, row.names = 1, comment.char = "", check.names = F)
 
 #首先画热图，需要得到聚类的顺序
