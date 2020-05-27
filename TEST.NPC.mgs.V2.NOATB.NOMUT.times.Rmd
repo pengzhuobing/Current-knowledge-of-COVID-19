@@ -1,5 +1,5 @@
 ---
-title: "Compare significance"
+title: "Compare significance" #比较单个菌的相关性
 output:
   html_notebook:
     code_fold: hide
@@ -15,7 +15,7 @@ library(RColorBrewer)
 library(pheatmap)
 library("survminer")
 library(parallel)
-source("TEST.functions.R")
+source("./TEST.functions.R")
 
 # Global variance for write or not
 do.write <- F
@@ -23,7 +23,7 @@ do.write <- F
 outdir <- "../../Result/TEST/timeSeries/"
 if(do.write&!dir.exists(outdir)){dir.create(outdir)}
 # tag
-tag <- "NPC.ATBF.times"
+tag <- "NPC.ATBF.times" #分析没有用抗生素的NPC病人
 ```
 
 # 1. Load data
@@ -46,7 +46,7 @@ By default, the script will only print significant records without writing all r
 
 ```{r, warning=FALSE}
 # Load thr1st,patSum,pat3M,Nthr,evaDat,pat3M0,pat3M1
-load("../../Result/Phenotype/NPC/phenotype.NPC.Rmd.RData")
+load("../..  /Result/Phenotype/NPC/phenotype.NPC.Rmd.RData")
 # Load patDNA0,patDNA3
 load("../../Result/Phenotype/NPC/FecalDNA.Rmd.RData")
 #tsALL.phe
@@ -56,105 +56,108 @@ TMB.info <- read.csv("../../Result/Phenotype/curated.HLA-E.info.csv")
 
 #FDNA.NS,FDNA.NPC.pick2,FDNA.NPC.pick3
 load("../../Result/TimeSeries/NPC/FDNA.NPC.picks.RData")
-FDNA.NPC.pick2.ATBF <- FDNA.NPC.pick2%>%filter(ATB02==F)
-FDNA.NPC.pick3.ATBF <- FDNA.NPC.pick3%>%filter(ATB02==F)
-sp.prf <- read.table("../../Result/01.Profile/MGS_V2.profile")
-sp.min.abun <- sort(unique(unlist(sp.prf)))[2]
-mgs.V2.anno <- read.table("../../Result/01.Profile/00.IGC.MGS.annotation",sep="\t",header=T)
+FDNA.NPC.pick2.ATBF <- FDNA.NPC.pick2%>%filter(ATB02==F)  #挑选出0-2个月没有用抗生素的病人
+FDNA.NPC.pick3.ATBF <- FDNA.NPC.pick3%>%filter(ATB02==F)  #FDNA.NPC.pick2,3的区别是2是ws，3是ms
+sp.prf <- read.table("../../Result/01.Profile/MGS_V2.profile") #sp.prf是所有样本的mgs的profile
+sp.min.abun <- sort(unique(unlist(sp.prf)))[2]  #获得sp.prf中最小的丰度数值
+mgs.V2.anno <- read.table("../../Result/01.Profile/00.IGC.MGS.annotation",sep="\t",header=T) #mgs物种注释信息
 mgs.V2.anno$mgs.V2 <- sub(":",".",mgs.V2.anno$X)
-mgs.V2.anno2 <- mgs.V2.anno[,c(8,2,3)]
+mgs.V2.anno2 <- mgs.V2.anno[,c(8,2,3)] #mgs物种注释信息，其中包括mgs、物种、Pct
 mgs.V2.LPS.anno <- read.csv("../../Result/01.Profile/MGS.1507.annoatation.LPS.csv")
 mgs.V2.LPS.anno$MGS <- sub(":",".",mgs.V2.LPS.anno$MGS)
-rownames(mgs.V2.LPS.anno) <- mgs.V2.LPS.anno$MGS
+rownames(mgs.V2.LPS.anno) <- mgs.V2.LPS.anno$MGS #mgs和界门纲目科属种的样本信息
 ```
 
 # Curation
-- Remove subjects with antibiotics usage during baseline (-2month before treatment) to 2nd month after treatment.
+- ../TUMORMETA/Assay/09.ReportScoree subjects with antibiotics usage during baseline (-2month before treatment) to 2nd month after treatment.
 
 **test randomly pick of baseline**
 ```{r}
-all.base.phe <- FDNA.NS%>%filter(Ms=="M0"&ATB02==F)
+all.base.phe <- FDNA.NS%>%filter(Ms=="M0"&ATB02==F)  #FDNA.NS是DNAID的全部信息，包括但不仅限于采样时间、来源，all.base.phe是baseline采样且0-2个月没有用抗生素的样本信息
 
-randPick <- function(d){
+#randPick随机输出矩阵中PID和DNAID(一列)
+randPick <- function(d){ 
   i <- sample(1:nrow(d),1); return(d[i,c("PID","DNAID")])
 }
 
-set.rand.time = 100
+set.rand.time = 100 
 
+#重复数太少，没有意义
 #for wilcox, the prefix is "NPC,rand.base.wilcox"
 #for anova,  the prefix is "rand.base.anova"
-if(file.exists(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))){
-  load(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
-}else{
-  #
-  rand.pick.base.phe <- NULL
-  for(i in 1:set.rand.time){
-    set.seed(i)
-    rand.pick.base.phe[[i]] <- ddply(all.base.phe,"PID",randPick)
-  }
-  #
-  cl <- makeCluster(5)
-  clusterExport(cl,c("aovFun","all.base.phe","rand.pick.base.phe","sp.prf","mgs.V2.anno2"))
-  rand.pick.base.test <- parSapply(cl,1:set.rand.time,FUN=function(x){
-    library(dplyr);library(plyr);
-    aovFun(sp.prf[,as.character(rand.pick.base.phe[[x]]$DNAID)],
-      all.base.phe[which(all.base.phe$DNAID%in%rand.pick.base.phe[[x]]$DNAID),],
-      "DNAID","BE3","BMI",ex.0=F)
-  },simplify = F)
-  stopCluster(cl)
-  save(rand.pick.base.phe, rand.pick.base.test,
-       file=paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
-}
+# if(file.exists(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))){
+#   load(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
+# }else{
+#   rand.pick.base.phe <- NULL
+#   for(i in 1:set.rand.time){
+#     set.seed(i)
+#     rand.pick.base.phe[[i]] <- ddply(all.base.phe,"PID",randPick)  #可重复的随机挑选100个M0样本，包括PID和DNAID信息
+#   }
+#   
+#   ####设置R多线程计算####
+#   cl <- makeCluster(5) #设置参与并行5个CPU核数目
+#   clusterExport(cl,c("aovFun","all.base.phe","rand.pick.base.phe","sp.prf","mgs.V2.anno2")) #添加并行计算中用到的环境变量
+#   rand.pick.base.test <- parSapply(cl,1:set.rand.time,FUN=function(x){  #parSapply是apply的并行计算版本
+#     library(dplyr);library(plyr);
+#     anoFun(sp.prf[,as.character(rand.pick.base.phe[[x]]$DNAID)], #rand.pick.base.test是对随机取得的100个样本mgs丰度进行annova检验的值
+#       all.base.phe[which(all.base.phe$DNAID%in%rand.pick.base.phe[[x]]$DNAID),], 
+#       "DNAID","BE3","BMI",)
+#   },simplify = F)
+#   stopCluster(cl)
+#   save(rand.pick.base.phe, rand.pick.base.test,
+#        file=paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
+# }
+
 # for wilcox use "p.value", anova use "ori.pval"
-p.val.stat <- sapply(rand.pick.base.test, "[[", "ori.pval")
-occ.stat <- sapply(rand.pick.base.test, "[[", "Occ.")
-enrich.stat <- sapply(rand.pick.base.test, "[[", "Enrich")
-p.val.stat.df <- data.frame(
-  mgs.V2=rand.pick.base.test[[1]]$mgs.V2,
-  mean.pval=rowMeans(p.val.stat),
-  mean.occ=rowMeans(occ.stat),
-  enrich = unlist(apply(enrich.stat,1,function(x) {
-    tb <- rev(sort(table(x)))[1]
-    if(is.na(tb)){return(NA)}else{return(names(tb))}})),
-  sign.freq=apply(p.val.stat,1,function(x) length(which(x<0.05)))
-)
+# p.val.stat <- sapply(rand.pick.base.test, "[[", "ori.pval")
+# occ.stat <- sapply(rand.pick.base.test, "[[", "Occ.")
+# enrich.stat <- sapply(rand.pick.base.test, "[[", "Enrich")
+# p.val.stat.df <- data.frame(
+#   mgs.V2=rand.pick.base.test[[1]]$mgs.V2,
+#   mean.pval=rowMeans(p.val.stat),
+#   mean.occ=rowMeans(occ.stat),
+#   enrich = unlist(apply(enrich.stat,1,function(x) {
+#     tb <- rev(sort(table(x)))[1]
+#     if(is.na(tb)){return(NA)}else{return(names(tb))}})),
+#   sign.freq=apply(p.val.stat,1,function(x) length(which(x<0.05)))
+# )
+# 
+# 
+# adj.pval.stat <- sapply(rand.pick.base.test, "[[", "adj.pval")   ##???[[是啥意思
+# adj.pval.stat.df <- data.frame(
+#   mgs.V2=rand.pick.base.test[[1]]$mgs.V2,  #pick第一个样品的mgs
+#   mean.pval=rowMeans(adj.pval.stat), 
+#   sign.freq=apply(adj.pval.stat,1,function(x) length(which(x<0.05)))
+# )
 
-
-adj.pval.stat <- sapply(rand.pick.base.test, "[[", "adj.pval")
-adj.pval.stat.df <- data.frame(
-  mgs.V2=rand.pick.base.test[[1]]$mgs.V2,
-  mean.pval=rowMeans(adj.pval.stat),
-  sign.freq=apply(adj.pval.stat,1,function(x) length(which(x<0.05)))
-)
-
-sign100.ori.df <- p.val.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
-sign100.adj.df <- adj.pval.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
-
-mgs.diff <- c(
-  setdiff(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2),
-  setdiff(sign100.adj.df$mgs.V2,sign100.ori.df$mgs.V2)
-)
-(merge(p.val.stat.df,adj.pval.stat.df,by="mgs.V2",all=T))%>%filter(mgs.V2%in%mgs.diff)
-mgs.common <- intersect(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2)
-export.sign.df <- merge(p.val.stat.df%>%filter(mgs.V2%in%mgs.common),mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
-#
-p.val.stat.df$enrich<-factor(p.val.stat.df$enrich,levels=c("PD","SD","PR"))
-prp <- ggplot(p.val.stat.df%>%filter(sign.freq>0),aes(y=mean.pval,x=sign.freq,size=mean.occ)) + 
-  geom_hline(yintercept = 0.05,linetype=2,color="grey50") + 
-  geom_vline(xintercept = 75,linetype=2,color="grey50") + 
-  geom_point(alpha=.3,aes(color=enrich),shape=16) + 
-  scale_color_brewer(palette = "Set1",na.value = "grey50") + theme_bw() +
-  scale_y_log10(breaks=c(0.001,0.01,0.05,0.1,1)) + 
-  annotation_logticks(side='l') +
-  labs(y="p value",x="frequency of singinicance",size="Occurrence") +
-  scale_x_continuous(breaks=seq(0,100,20))
-prp
-if(do.write){
-  ggsave(prp,width = 4,height=6,
-         file = "../../Result/TEST/timeSeries/rand.100.anova.pval.freq.dot.pdf")
-  write.csv(export.sign.df,
-            file="../../Result/TEST/timeSeries/rand.100.anova.sign.mgs.df.csv")
-}
+# sign100.ori.df <- p.val.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
+# sign100.adj.df <- adj.pval.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
+# 
+# mgs.diff <- c(
+#   setdiff(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2),
+#   setdiff(sign100.adj.df$mgs.V2,sign100.ori.df$mgs.V2)
+# )
+# (merge(p.val.stat.df,adj.pval.stat.df,by="mgs.V2",all=T))%>%filter(mgs.V2%in%mgs.diff)
+# mgs.common <- intersect(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2)
+# export.sign.df <- merge(p.val.stat.df%>%filter(mgs.V2%in%mgs.common),mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+# #
+# p.val.stat.df$enrich<-factor(p.val.stat.df$enrich,levels=c("PD","SD","PR"))
+# prp <- ggplot(p.val.stat.df%>%filter(sign.freq>0),aes(y=mean.pval,x=sign.freq,size=mean.occ)) + 
+#   geom_hline(yintercept = 0.05,linetype=2,color="grey50") + 
+#   geom_vline(xintercept = 75,linetype=2,color="grey50") + 
+#   geom_point(alpha=.3,aes(color=enrich),shape=16) + 
+#   scale_color_brewer(palette = "Set1",na.value = "grey50") + theme_bw() +
+#   scale_y_log10(breaks=c(0.001,0.01,0.05,0.1,1)) + 
+#   annotation_logticks(side='l') +
+#   labs(y="p value",x="frequency of singinicance",size="Occurrence") +
+#   scale_x_continuous(breaks=seq(0,100,20))
+# prp
+# if(do.write){
+#   ggsave(prp,width = 4,height=6,
+#          file = "../../Result/TEST/timeSeries/rand.100.anova.pval.freq.dot.pdf")
+#   write.csv(export.sign.df,
+#             file="../../Result/TEST/timeSeries/rand.100.anova.sign.mgs.df.csv")
+# }
 ```
 
 **test BE2**
@@ -179,9 +182,9 @@ if(file.exists(paste0("../../Result/TEST/rand.base.wilcox.PD.",set.rand.time,".R
 BE2.p.val.stat <- sapply(rand.pick.base.BE2, "[[", "p.value")
 BE2.occ.stat <- sapply(rand.pick.base.BE2, "[[", "Occ.")
 BE2.enrich.stat <- sapply(rand.pick.base.BE2, "[[", "Enrich")
-BE2.p.val.stat.df <- data.frame(
+BE2.p.val.stat.df <- data.frame( #BE2.p.val.stat.df指mgs、平均值、富集方向、显著性等
   mgs.V2=rand.pick.base.BE2[[1]]$mgs.V2,
-  mean.pval=rowMeans(BE2.p.val.stat),
+  mean.pval=rowMeans(BE2.p.val.stat), #算的每行的平均值
   mean.occ=rowMeans(BE2.occ.stat),
   enrich = unlist(apply(BE2.enrich.stat,1,function(x) {
     tb <- rev(sort(table(x)))[1]
@@ -193,36 +196,39 @@ ggplot(BE2.p.val.stat.df%>%filter(sign.freq>0),aes(x=mean.pval,y=sign.freq,size=
   geom_vline(xintercept = 0.05) +
   geom_point(alpha=.2) + scale_x_log10() + scale_y_continuous(breaks=seq(0,100,10))
 
-sign.BE2.mgs <- (BE2.p.val.stat.df%>%filter(sign.freq==100&mean.pval<0.05))$mgs.V2
+sign.BE2.mgs <- (BE2.p.val.stat.df%>%filter(sign.freq==100&mean.pval<0.05))$mgs.V2 #挑出显著的mgs
 
 ```
 
 test each phase
 
-Change method to anova:
+Change method to kw:
 ```{r}
-if(file.exists("../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")){
-  load("../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")
+#WS
+if(file.exists("../../Result/TEST/timeSeries/sum.Ws.BE3.kw.test.RData")){
+  load("../../Result/TEST/timeSeries/sum.Ws.BE3.kw.test.RData")
 }else{
-  FDNA.NPC.pick2.ATBF$Ws <- droplevels(FDNA.NPC.pick2.ATBF$Ws)
-  sum.Ws.BE3.test <- NULL
+  FDNA.NPC.pick2.ATBF$Ws <- droplevels(FDNA.NPC.pick2.ATBF$Ws) #删除level w18
+  sum.Ws.BE3.test <- NULL  #分为3个进程
   for(i in levels(FDNA.NPC.pick2.ATBF$Ws)){
     tsi.phe <- FDNA.NPC.pick2.ATBF%>%filter(Ws==i)
-    tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ws,tsi.phe$BE3)),]
-    rownames(tsi.phe) <- tsi.phe$DNAID
-    tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
-    tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
-    sum.Ws.BE3.test[[i]] <- tsi.BE3.in0.w
+    tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ws,tsi.phe$BE3)),]  #似乎只是排了个序
+    rownames(tsi.phe) <- tsi.phe$DNAID 
+    tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)] #tsi.phe的mgs的丰度信息
+    ### tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
+    tsi.BE3.in0.w <- tkFun(tsi.prf,tsi.phe,"DNAID","BE3",NULL,ex.0=F) #三个疾病进程需要用到kw检验,这里不要考虑BMI
+    sum.Ws.BE3.test[[i]] <- tsi.BE3.in0.w 
     ggplot(tsi.BE3.in0.w,aes(x=FDR,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".FDR.hist.pdf"))
-    ggplot(tsi.BE3.in0.w,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".ori.pval.hist.pdf"))
-    ggplot(tsi.BE3.in0.w,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".adj.pval.hist.pdf"))
+    #ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".FDR.hist.pdf"))
+    #ggplot(tsi.BE3.in0.w,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    #ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".ori.pval.hist.pdf"))
+    #ggplot(tsi.BE3.in0.w,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    #ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".adj.pval.hist.pdf"))
   }
-  save(sum.Ws.BE3.test,file="../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")
+  save(sum.Ws.BE3.test,file="../../Result/TEST/timeSeries/NPC.sum.Ws.BE3.kw.test.RData")
 }
 
+#MS
 if(file.exists("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")){
   load("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")
 }else{
@@ -232,16 +238,17 @@ if(file.exists("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")){
     tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ms,tsi.phe$BE3)),]
     rownames(tsi.phe) <- tsi.phe$DNAID
     tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
-    tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
-    sum.Ms.BE3.test[[i]] <- tsi.BE3.in0.w
-    ggplot(tsi.BE3.in0.w,aes(x=FDR,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".FDR.hist.pdf"))
-    ggplot(tsi.BE3.in0.w,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".ori.pval.hist.pdf"))
-    ggplot(tsi.BE3.in0.w,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
-    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".adj.pval.hist.pdf"))
+    ##tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
+    tsi.BE3.in0.m <- tkFun(tsi.prf,tsi.phe,"DNAID","BE3",NULL,ex.0=F)
+    sum.Ms.BE3.test[[i]] <- tsi.BE3.in0.m
+    ggplot(tsi.BE3.in0.m,aes(x=FDR,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    # ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".FDR.hist.pdf"))
+    # ggplot(tsi.BE3.in0.m,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    # ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".ori.pval.hist.pdf"))
+    # ggplot(tsi.BE3.in0.m,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    # ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".adj.pval.hist.pdf"))
   }
-  save(sum.Ms.BE3.test,file="../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")
+  save(sum.Ms.BE3.test,file="../../Result/TEST/timeSeries/sum.Ms.BE3.kw.test.RData")
 }
 ```
 
@@ -249,39 +256,42 @@ if(file.exists("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")){
 ```{r, eval=FALSE}
 
 i="W0"
-tsi.phe <- FDNA.NPC.pick2.ATBF%>%filter(Ws==i)
+tsi.phe <- FDNA.NPC.pick2.ATBF%>%filter(Ws==i) #w0样本信息
 tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ws,tsi.phe$BE3)),]
 rownames(tsi.phe) <- tsi.phe$DNAID
-tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
+tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)] #w0样本profile
 dati <- data.frame(t(tsi.prf),tsi.phe)
-res.aov <- aov(MGS.igc1507~BMI+BE3,data=dati)
-summary(aov(MGS.igc1507~BMI+BE3,data=dati))
+res.aov <- aov(MGS.igc1507~BE3,data=dati) #做多因素方差分析,为什么挑MGS.igc1507 ?
+summary(aov(MGS.igc1507~BE3,data=dati))
 
 sum.raw.aov <- NULL
 sum.adj.aov <- NULL
-for(i in 1:nrow(tsi.prf)){
+for(i in 1:nrow(tsi.prf)){   #对每一个mgs都做annova方差分析
   tmp <- dati
   colnames(tmp)[i] <- "abun"
   minnum <- sort(unique(tmp$abun))[1:2]
   if(minnum[1]==0){tmp$abun[which(tmp$abun==0)]<-ifelse(is.na(minnum[2]),1e-10,minnum[2]/10)}
   tmp$lgab <- log10(tmp$abun)
   
-  res.aov <- aov(lgab~BE3,data=tmp)
+  res.aov <- aov(lgab~BE3,data=tmp) #
   HSD <- TukeyHSD(res.aov)
   res <- summary(res.aov)
   newdf <- as.data.frame(res[[1]][1,])
   rownames(newdf) <- colnames(dati)[i]
   sum.raw.aov <- rbind(sum.raw.aov,data.frame(newdf,t(HSD$BE3[,4])))
   
-  res <- summary(aov(lgab~BMI+BE3,data=tmp))
-  newdf <- as.data.frame(res[[1]][2,])
+  res <- summary(aov(lgab~BE3,data=tmp))
+  newdf <- as.data.frame(res[[1]][2,]) #获得residuals误差
+  #newdf <- as.data.frame(res[[1]][1,])
   rownames(newdf) <- colnames(dati)[i]
   sum.adj.aov <- rbind(sum.adj.aov,newdf)
 }
 sum.aov <- cbind(sum.raw.aov,sum.adj.aov)
 
 colnames(sum.aov)[9:13] <- c("Df2","Sum.Sq2","Mean.Sq2","F.value2","p.adj")
-sum.aov$mostGRP <- ifelse(sum.aov$SD.PD<sum.aov$PR.PD,ifelse(sum.aov$SD.PD<sum.aov$PR.SD,"SD.PD"),)
+#sum.aov$mostGRP <- ifelse(sum.aov$SD.PD<sum.aov$PR.PD,ifelse(sum.aov$SD.PD<sum.aov$PR.SD,"SD.PD"),) 
+sum.aov$mostGRP <- ifelse(sum.aov$SD.PD<sum.aov$PR.PD,ifelse(sum.aov$SD.PD<sum.aov$PR.SD,"SD.PD","PR.SD"),"PR.PD")
+#mostGRP列选取SD.PD/PD.PR/SD.PR中最小的那个
 ggplot(sum.aov,aes(x=p.adj)) + geom_histogram(position="stack") + xlim(c(0,1))
 ```
 
@@ -297,18 +307,19 @@ sum.Ms.wilcox.df <- rbind(
   cbind(Ms="M4",sum.Ms.BE3.test$M4)
 )
 
-#if anova
-sum.Ms.wilcox.df$p.value<-sum.Ms.wilcox.df$ori.pval
+#if kw or wilcox
+#sum.Ms.wilcox.df$p.value<-sum.Ms.wilcox.df$ori.pval
 #
 sum.Ms.wilcox.matrix <- dcast(sum.Ms.wilcox.df%>%filter(Occ.>0.2),mgs.V2~Ms,value.var = "p.value")
 #
-select.mgs <- (export.sign.df%>%filter(mgs.V2%in%mgs.common&mean.occ>0.2))$mgs.V2
+
+select.mgs <- (sum.Ms.BE3.test$M0%>%filter(p.value<0.05&Occ.>0.2))$mgs.V2
 sum.Ms.wilcox.matrix <- dcast(sum.Ms.wilcox.df%>%filter(mgs.V2%in%select.mgs),mgs.V2~Ms,value.var = "p.value")
 #
 rownames(sum.Ms.wilcox.matrix) <- sum.Ms.wilcox.matrix[,1]
 sum.Ms.wilcox.matrix <- sum.Ms.wilcox.matrix[,-1]
 
-sum.Ms.sign.matrix <- sum.Ms.wilcox.matrix[which(sum.Ms.wilcox.matrix[,1]<0.05),]
+#sum.Ms.sign.matrix <- sum.Ms.wilcox.matrix[which(sum.Ms.wilcox.matrix[,1]<0.05),]
 
 sum.Ms.sign.matrix <- apply(sum.Ms.sign.matrix,1:2,function(x) ifelse(is.na(x),1,x))
 
@@ -330,7 +341,7 @@ signifFun <- function(d){
 
 ```{r}
 ggplot(sum.Ms.wilcox.df%>%filter(Pct>20&Occ.>0.2),
-       aes(x=adj.pval,color=Ms)) + geom_density()
+       aes(x=p.value,color=Ms)) + geom_density()
 ```
 
 
@@ -435,7 +446,7 @@ phMdv <- pheatmap(sum.Ms.median.matrix[visual.mgs,],
 phMdv
 if(do.write){
   ggsave(phMdv,width=8,height=8,
-       filename="../../Result/TEST/timeSeries/mgs.anova.Ms.pheatmap.pdf")
+       filename="../../Result/TEST/timeSeries/NPC.mgs.kw.Ms.pheatmap.pdf")
 }
 ```
 
@@ -462,10 +473,9 @@ sum.Ws.wilcox.df <- rbind(
   cbind(Ws="W16",sum.Ws.BE3.test$W16)
 )
 
-sum.Ws.wilcox.df$p.value <- sum.Ws.wilcox.df$ori.pval
 sum.Ws.wilcox.matrix <- dcast(sum.Ws.wilcox.df,mgs.V2~Ws,value.var = "p.value")
 rownames(sum.Ws.wilcox.matrix) <- sum.Ws.wilcox.matrix[,1]
-sum.Ws.wilcox.matrix <- sum.Ws.wilcox.matrix[phm.row.order,-1]
+#sum.Ws.wilcox.matrix <- sum.Ws.wilcox.matrix[phm.row.order,-1]
 sum.Ws.wilcox.matrix <- apply(sum.Ws.wilcox.matrix,1:2,function(x) ifelse(is.na(x),1,x))
 
 # median value
@@ -498,14 +508,15 @@ phWd <- pheatmap(sum.Ws.median.matrix[phm.row.order,],cluster_rows = F,cluster_c
          #breaks=rev(c(1,0.7,0.5,0.2,0.1,0.05,0.01,0.005,0.001,0.0005,0))
 )
 phWd
+if(do.write){
+  ggsave(phWd,width=8,height=8,
+       filename="../../Result/TEST/timeSeries/NPC.mgs.kw.Ws.pheatmap.pdf")
+}
 ```
 
 
-**test rand BE3**
+**Get significant BE3 differential taxonomic annotation & order**
 ```{r}
-pick.rand.100 <- p.val.stat.df%>%filter(mean.pval<0.05&mean.occ>.2)
-pick.rand.100.mat <- apply(sum.Ms.wilcox.matrix,1:2,function(x) ifelse(is.na(x),1,x))
-pick.rand.100.mgs <- as.character(pick.rand.100$mgs.V2)
 
 
 phMd.r <- pheatmap(sum.Ms.median.matrix[pick.rand.100.mgs,],
@@ -514,7 +525,11 @@ phMd.r <- pheatmap(sum.Ms.median.matrix[pick.rand.100.mgs,],
          gaps_col = c(6,12),
          display_numbers = sum.Ms.signif.matrix[pick.rand.100.mgs,]
 )
-phMd.r
+phMd.r <- pheatmap(sum.Ws.median.matrix[phm.row.order,],cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(9,18),display_numbers = sum.Ws.signif.matrix,
+         #breaks=rev(c(1,0.7,0.5,0.2,0.1,0.05,0.01,0.005,0.001,0.0005,0))
+)
 
 phMd.hrow.label <- data.frame(hclust=cutree(phMd.r$tree_row,k=4))
 phMd.hrow.label$hclust <- as.factor(phMd.hrow.label$hclust)
@@ -527,13 +542,13 @@ rownames(phMd.r.sum.sign.anno) <- phMd.r.sum.sign.anno$mgs.V2
 phMd.r.sum.sign.anno <- phMd.r.sum.sign.anno[phMd.row.order,]
 
 #visual
-mgs.pct20 <- mgs.V2.anno2$mgs.V2[which(mgs.V2.anno2$Pct>20)]
-pick.rand.100.mgs.pct20 <- intersect(pick.rand.100.mgs,mgs.pct20)
-phMd.r2 <- pheatmap(sum.Ms.median.matrix[pick.rand.100.mgs.pct20,],
+mgs.pct20 <- mgs.V2.anno2$mgs.V2[which(mgs.V2.anno2$Pct>20&mgs.V2.anno2$mgs.V2%in%phMd.row.order)]
+#pick.rand.100.mgs.pct20 <- intersect(pick.rand.100.mgs,mgs.pct20)
+phMd.r2 <- pheatmap(sum.Ms.median.matrix[mgs.pct20,],
          cluster_rows = T,cluster_cols = F,
          color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
          gaps_col = c(6,12),
-         display_numbers = sum.Ms.signif.matrix[pick.rand.100.mgs.pct20,],
+         display_numbers = sum.Ms.signif.matrix[mgs.pct20,],
          filename = "../../Result/TEST/timeSeries/phMd.r2.pdf",width = 5.5,height=5,
 )
 phMd.r2
@@ -542,9 +557,9 @@ phMd.r2.label$hclust <- as.factor(phMd.r2.label$hclust)
 phMd.r2.order <- phMd.r2$tree_row$labels[phMd.r2$tree_row$order]
 
 if(do.write){
-  write.csv(phMd.r.sum.sign.anno,file="../../Result/TEST/timeSeries/mgs.sum.phmd.gin.anno.csv")
+  write.csv(phMd.r.sum.sign.anno,file="../../Result/TEST/timeSeries/NPC.mgs.sum.phmd.gin.anno.csv")
   write.csv(phMd.r.sum.sign.anno[phMd.r2.order,],
-            file="../../Result/TEST/timeSeries/mgs.sum.phmd.pct20.anno.csv")
+            file="../../Result/TEST/timeSeries/NPC.mgs.sum.phmd.pct20.anno.csv")
 }
 ```
 
@@ -667,6 +682,7 @@ psSD<- ggplot(select.df%>%filter(Enrich=="SD"),aes(x=Ms,y=Abundance,fill=BE3)) +
   scale_y_log10() + facet_wrap(MGS~MainTax,ncol=1,scale="free") + guides(fill=F) +
   scale_fill_brewer(palette = "Set1") + theme_bw()
 psSD
+
 psPR<- ggplot(select.df%>%filter(Enrich=="PR"),aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
   stat_compare_means(label="p.signif") + guides(fill=F) + theme_bw() +
   scale_y_log10() + facet_wrap(MGS~MainTax,ncol=3,scale="free") + scale_fill_brewer(palette = "Set1")
@@ -674,7 +690,7 @@ psPR
 
 psPD<- ggplot(select.df%>%filter(Enrich=="PD"),aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
   stat_compare_means(label="p.signif") + theme_bw() +
-  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=1,scale="free") + scale_fill_brewer(palette = "Set1")
+  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=2,scale="free") + scale_fill_brewer(palette = "Set1")
 psPD
 
 psc <- pheatmap(apply(sp.prf[select.MGS,as.character(tsALL.phe$DNAID)],
@@ -685,10 +701,10 @@ psc <- pheatmap(apply(sp.prf[select.MGS,as.character(tsALL.phe$DNAID)],
          #annotation_row = ts36.anno[,c("Enrich","Phylum"),F])
 
 if(do.write){
-  ggsave(psa,file="../../Result/TEST/timeSeries/summary.marker.abun.pdf",width=4,height=10)
-  ggsave(psPD,file="../../Result/TEST/timeSeries/EnrichPD.marker.abun.pdf",width=5,height=8)
-  ggsave(psSD,file="../../Result/TEST/timeSeries/EnrichSD.marker.abun.pdf",width=4,height=8)
-  ggsave(psPR,file="../../Result/TEST/timeSeries/EnrichPR.marker.abun.pdf",width=12,height=8)
+  ggsave(psa,file="../../Result/TEST/timeSeries/NPC.summary.marker.abun.pdf",width=4,height=10)
+  ggsave(psPD,file="../../Result/TEST/timeSeries/NPC.EnrichPD.marker.abun.pdf",width=5,height=8)
+  ggsave(psSD,file="../../Result/TEST/timeSeries/NPC.EnrichSD.marker.abun.pdf",width=4,height=8)
+  ggsave(psPR,file="../../Result/TEST/timeSeries/NPC.EnrichPR.marker.abun.pdf",width=12,height=8)
 }
 ```
 
@@ -1145,4 +1161,5 @@ p = p + ggtitle("MDS on various distance metrics for Enterotype dataset")
 p
 
 ```
+
 
