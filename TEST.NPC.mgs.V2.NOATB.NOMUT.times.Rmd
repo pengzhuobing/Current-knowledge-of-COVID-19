@@ -1,0 +1,1148 @@
+---
+title: "Compare significance"
+output:
+  html_notebook:
+    code_fold: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(plyr)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(pheatmap)
+library("survminer")
+library(parallel)
+source("TEST.functions.R")
+
+# Global variance for write or not
+do.write <- F
+# Outpu dir
+outdir <- "../../Result/TEST/timeSeries/"
+if(do.write&!dir.exists(outdir)){dir.create(outdir)}
+# tag
+tag <- "NPC.ATBF.times"
+```
+
+# 1. Load data
+
+> 1). Phenotype info
+>
+> 2). 833 samples Speices profile table (MetaPhlAn2)
+>
+>   1. Only baseline
+>
+>   2. Only treatment 1 month
+>
+>   3. Only treatment 2 month
+>
+>   4. Only treatment 3 month
+
+By default, the script will only print significant records without writing all results.
+
+> Reading V2 profile and phenotype
+
+```{r, warning=FALSE}
+# Load thr1st,patSum,pat3M,Nthr,evaDat,pat3M0,pat3M1
+load("../../Result/Phenotype/NPC/phenotype.NPC.Rmd.RData")
+# Load patDNA0,patDNA3
+load("../../Result/Phenotype/NPC/FecalDNA.Rmd.RData")
+#tsALL.phe
+load("../../Result/TEST/timeSeries/tsALL.phe.RData")
+#TMB
+TMB.info <- read.csv("../../Result/Phenotype/curated.HLA-E.info.csv")
+
+#FDNA.NS,FDNA.NPC.pick2,FDNA.NPC.pick3
+load("../../Result/TimeSeries/NPC/FDNA.NPC.picks.RData")
+FDNA.NPC.pick2.ATBF <- FDNA.NPC.pick2%>%filter(ATB02==F)
+FDNA.NPC.pick3.ATBF <- FDNA.NPC.pick3%>%filter(ATB02==F)
+sp.prf <- read.table("../../Result/01.Profile/MGS_V2.profile")
+sp.min.abun <- sort(unique(unlist(sp.prf)))[2]
+mgs.V2.anno <- read.table("../../Result/01.Profile/00.IGC.MGS.annotation",sep="\t",header=T)
+mgs.V2.anno$mgs.V2 <- sub(":",".",mgs.V2.anno$X)
+mgs.V2.anno2 <- mgs.V2.anno[,c(8,2,3)]
+mgs.V2.LPS.anno <- read.csv("../../Result/01.Profile/MGS.1507.annoatation.LPS.csv")
+mgs.V2.LPS.anno$MGS <- sub(":",".",mgs.V2.LPS.anno$MGS)
+rownames(mgs.V2.LPS.anno) <- mgs.V2.LPS.anno$MGS
+```
+
+# Curation
+- Remove subjects with antibiotics usage during baseline (-2month before treatment) to 2nd month after treatment.
+
+**test randomly pick of baseline**
+```{r}
+all.base.phe <- FDNA.NS%>%filter(Ms=="M0"&ATB02==F)
+
+randPick <- function(d){
+  i <- sample(1:nrow(d),1); return(d[i,c("PID","DNAID")])
+}
+
+set.rand.time = 100
+
+#for wilcox, the prefix is "NPC,rand.base.wilcox"
+#for anova,  the prefix is "rand.base.anova"
+if(file.exists(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))){
+  load(paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
+}else{
+  #
+  rand.pick.base.phe <- NULL
+  for(i in 1:set.rand.time){
+    set.seed(i)
+    rand.pick.base.phe[[i]] <- ddply(all.base.phe,"PID",randPick)
+  }
+  #
+  cl <- makeCluster(5)
+  clusterExport(cl,c("aovFun","all.base.phe","rand.pick.base.phe","sp.prf","mgs.V2.anno2"))
+  rand.pick.base.test <- parSapply(cl,1:set.rand.time,FUN=function(x){
+    library(dplyr);library(plyr);
+    aovFun(sp.prf[,as.character(rand.pick.base.phe[[x]]$DNAID)],
+      all.base.phe[which(all.base.phe$DNAID%in%rand.pick.base.phe[[x]]$DNAID),],
+      "DNAID","BE3","BMI",ex.0=F)
+  },simplify = F)
+  stopCluster(cl)
+  save(rand.pick.base.phe, rand.pick.base.test,
+       file=paste0("../../Result/TEST/NPC.rand.base.anova.",set.rand.time,".RData"))
+}
+# for wilcox use "p.value", anova use "ori.pval"
+p.val.stat <- sapply(rand.pick.base.test, "[[", "ori.pval")
+occ.stat <- sapply(rand.pick.base.test, "[[", "Occ.")
+enrich.stat <- sapply(rand.pick.base.test, "[[", "Enrich")
+p.val.stat.df <- data.frame(
+  mgs.V2=rand.pick.base.test[[1]]$mgs.V2,
+  mean.pval=rowMeans(p.val.stat),
+  mean.occ=rowMeans(occ.stat),
+  enrich = unlist(apply(enrich.stat,1,function(x) {
+    tb <- rev(sort(table(x)))[1]
+    if(is.na(tb)){return(NA)}else{return(names(tb))}})),
+  sign.freq=apply(p.val.stat,1,function(x) length(which(x<0.05)))
+)
+
+
+adj.pval.stat <- sapply(rand.pick.base.test, "[[", "adj.pval")
+adj.pval.stat.df <- data.frame(
+  mgs.V2=rand.pick.base.test[[1]]$mgs.V2,
+  mean.pval=rowMeans(adj.pval.stat),
+  sign.freq=apply(adj.pval.stat,1,function(x) length(which(x<0.05)))
+)
+
+sign100.ori.df <- p.val.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
+sign100.adj.df <- adj.pval.stat.df%>%filter(sign.freq>=75&mean.pval<0.05)
+
+mgs.diff <- c(
+  setdiff(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2),
+  setdiff(sign100.adj.df$mgs.V2,sign100.ori.df$mgs.V2)
+)
+(merge(p.val.stat.df,adj.pval.stat.df,by="mgs.V2",all=T))%>%filter(mgs.V2%in%mgs.diff)
+mgs.common <- intersect(sign100.ori.df$mgs.V2,sign100.adj.df$mgs.V2)
+export.sign.df <- merge(p.val.stat.df%>%filter(mgs.V2%in%mgs.common),mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+#
+p.val.stat.df$enrich<-factor(p.val.stat.df$enrich,levels=c("PD","SD","PR"))
+prp <- ggplot(p.val.stat.df%>%filter(sign.freq>0),aes(y=mean.pval,x=sign.freq,size=mean.occ)) + 
+  geom_hline(yintercept = 0.05,linetype=2,color="grey50") + 
+  geom_vline(xintercept = 75,linetype=2,color="grey50") + 
+  geom_point(alpha=.3,aes(color=enrich),shape=16) + 
+  scale_color_brewer(palette = "Set1",na.value = "grey50") + theme_bw() +
+  scale_y_log10(breaks=c(0.001,0.01,0.05,0.1,1)) + 
+  annotation_logticks(side='l') +
+  labs(y="p value",x="frequency of singinicance",size="Occurrence") +
+  scale_x_continuous(breaks=seq(0,100,20))
+prp
+if(do.write){
+  ggsave(prp,width = 4,height=6,
+         file = "../../Result/TEST/timeSeries/rand.100.anova.pval.freq.dot.pdf")
+  write.csv(export.sign.df,
+            file="../../Result/TEST/timeSeries/rand.100.anova.sign.mgs.df.csv")
+}
+```
+
+**test BE2**
+```{r warning=FALSE}
+if(file.exists(paste0("../../Result/TEST/rand.base.wilcox.PD.",set.rand.time,".RData"))){
+  load(paste0("../../Result/TEST/rand.base.wilcox.PD.",set.rand.time,".RData"))
+}else{
+  #
+  cl <- makeCluster(5)
+  clusterExport(cl,c("ttFun","all.base.phe","rand.pick.base.phe","sp.prf","mgs.V2.anno2"))
+  rand.pick.base.BE2 <- parSapply(cl,1:set.rand.time,FUN=function(x){
+    library(dplyr);library(plyr);
+    ttFun(sp.prf[,as.character(rand.pick.base.phe[[x]]$DNAID)],
+      all.base.phe[which(all.base.phe$DNAID%in%rand.pick.base.phe[[x]]$DNAID),],
+      "DNAID","BE2",NULL,ex.0=F)
+  },simplify = F)
+  stopCluster(cl)
+  save(rand.pick.base.phe, rand.pick.base.BE2,
+       file=paste0("../../Result/TEST/rand.base.wilcox.PD.",set.rand.time,".RData"))
+}
+
+BE2.p.val.stat <- sapply(rand.pick.base.BE2, "[[", "p.value")
+BE2.occ.stat <- sapply(rand.pick.base.BE2, "[[", "Occ.")
+BE2.enrich.stat <- sapply(rand.pick.base.BE2, "[[", "Enrich")
+BE2.p.val.stat.df <- data.frame(
+  mgs.V2=rand.pick.base.BE2[[1]]$mgs.V2,
+  mean.pval=rowMeans(BE2.p.val.stat),
+  mean.occ=rowMeans(BE2.occ.stat),
+  enrich = unlist(apply(BE2.enrich.stat,1,function(x) {
+    tb <- rev(sort(table(x)))[1]
+    if(is.na(tb)){return(NA)}else{return(names(tb))}})),
+  sign.freq=apply(BE2.p.val.stat,1,function(x) length(which(x<0.05)))
+)
+
+ggplot(BE2.p.val.stat.df%>%filter(sign.freq>0),aes(x=mean.pval,y=sign.freq,size=mean.occ)) + 
+  geom_vline(xintercept = 0.05) +
+  geom_point(alpha=.2) + scale_x_log10() + scale_y_continuous(breaks=seq(0,100,10))
+
+sign.BE2.mgs <- (BE2.p.val.stat.df%>%filter(sign.freq==100&mean.pval<0.05))$mgs.V2
+
+```
+
+test each phase
+
+Change method to anova:
+```{r}
+if(file.exists("../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")){
+  load("../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")
+}else{
+  FDNA.NPC.pick2.ATBF$Ws <- droplevels(FDNA.NPC.pick2.ATBF$Ws)
+  sum.Ws.BE3.test <- NULL
+  for(i in levels(FDNA.NPC.pick2.ATBF$Ws)){
+    tsi.phe <- FDNA.NPC.pick2.ATBF%>%filter(Ws==i)
+    tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ws,tsi.phe$BE3)),]
+    rownames(tsi.phe) <- tsi.phe$DNAID
+    tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
+    tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
+    sum.Ws.BE3.test[[i]] <- tsi.BE3.in0.w
+    ggplot(tsi.BE3.in0.w,aes(x=FDR,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".FDR.hist.pdf"))
+    ggplot(tsi.BE3.in0.w,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".ori.pval.hist.pdf"))
+    ggplot(tsi.BE3.in0.w,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ws.",i,".adj.pval.hist.pdf"))
+  }
+  save(sum.Ws.BE3.test,file="../../Result/TEST/timeSeries/sum.Ws.BE3.anova.test.RData")
+}
+
+if(file.exists("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")){
+  load("../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")
+}else{
+  sum.Ms.BE3.test <- NULL
+  for(i in levels(FDNA.NPC.pick3.ATBF$Ms)){
+    tsi.phe <- FDNA.NPC.pick3.ATBF%>%filter(Ms==i)
+    tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ms,tsi.phe$BE3)),]
+    rownames(tsi.phe) <- tsi.phe$DNAID
+    tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
+    tsi.BE3.in0.w <- aovFun(tsi.prf,tsi.phe,"DNAID","BE3","BMI",ex.0=F)
+    sum.Ms.BE3.test[[i]] <- tsi.BE3.in0.w
+    ggplot(tsi.BE3.in0.w,aes(x=FDR,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".FDR.hist.pdf"))
+    ggplot(tsi.BE3.in0.w,aes(x=ori.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".ori.pval.hist.pdf"))
+    ggplot(tsi.BE3.in0.w,aes(x=adj.pval,fill=Enrich)) + geom_histogram(position="stack") + xlim(c(0,1))
+    ggsave(paste0("../../Result/TEST/timeSeries/Ms.",i,".adj.pval.hist.pdf"))
+  }
+  save(sum.Ms.BE3.test,file="../../Result/TEST/timeSeries/sum.Ms.BE3.anova.test.RData")
+}
+```
+
+**test anova**
+```{r, eval=FALSE}
+
+i="W0"
+tsi.phe <- FDNA.NPC.pick2.ATBF%>%filter(Ws==i)
+tsi.phe <- tsi.phe[order(interaction(tsi.phe$Ws,tsi.phe$BE3)),]
+rownames(tsi.phe) <- tsi.phe$DNAID
+tsi.prf <- sp.prf[,as.character(tsi.phe$DNAID)]
+dati <- data.frame(t(tsi.prf),tsi.phe)
+res.aov <- aov(MGS.igc1507~BMI+BE3,data=dati)
+summary(aov(MGS.igc1507~BMI+BE3,data=dati))
+
+sum.raw.aov <- NULL
+sum.adj.aov <- NULL
+for(i in 1:nrow(tsi.prf)){
+  tmp <- dati
+  colnames(tmp)[i] <- "abun"
+  minnum <- sort(unique(tmp$abun))[1:2]
+  if(minnum[1]==0){tmp$abun[which(tmp$abun==0)]<-ifelse(is.na(minnum[2]),1e-10,minnum[2]/10)}
+  tmp$lgab <- log10(tmp$abun)
+  
+  res.aov <- aov(lgab~BE3,data=tmp)
+  HSD <- TukeyHSD(res.aov)
+  res <- summary(res.aov)
+  newdf <- as.data.frame(res[[1]][1,])
+  rownames(newdf) <- colnames(dati)[i]
+  sum.raw.aov <- rbind(sum.raw.aov,data.frame(newdf,t(HSD$BE3[,4])))
+  
+  res <- summary(aov(lgab~BMI+BE3,data=tmp))
+  newdf <- as.data.frame(res[[1]][2,])
+  rownames(newdf) <- colnames(dati)[i]
+  sum.adj.aov <- rbind(sum.adj.aov,newdf)
+}
+sum.aov <- cbind(sum.raw.aov,sum.adj.aov)
+
+colnames(sum.aov)[9:13] <- c("Df2","Sum.Sq2","Mean.Sq2","F.value2","p.adj")
+sum.aov$mostGRP <- ifelse(sum.aov$SD.PD<sum.aov$PR.PD,ifelse(sum.aov$SD.PD<sum.aov$PR.SD,"SD.PD"),)
+ggplot(sum.aov,aes(x=p.adj)) + geom_histogram(position="stack") + xlim(c(0,1))
+```
+
+
+**check significant MGSs**
+```{r}
+sum.Ms.wilcox.df <- rbind(
+  cbind(Ms="M0",sum.Ms.BE3.test$M0),
+  cbind(Ms="W1",sum.Ms.BE3.test$W1),
+  cbind(Ms="M1",sum.Ms.BE3.test$M1),
+  cbind(Ms="M2",sum.Ms.BE3.test$M2),
+  cbind(Ms="M3",sum.Ms.BE3.test$M3),
+  cbind(Ms="M4",sum.Ms.BE3.test$M4)
+)
+
+#if anova
+sum.Ms.wilcox.df$p.value<-sum.Ms.wilcox.df$ori.pval
+#
+sum.Ms.wilcox.matrix <- dcast(sum.Ms.wilcox.df%>%filter(Occ.>0.2),mgs.V2~Ms,value.var = "p.value")
+#
+select.mgs <- (export.sign.df%>%filter(mgs.V2%in%mgs.common&mean.occ>0.2))$mgs.V2
+sum.Ms.wilcox.matrix <- dcast(sum.Ms.wilcox.df%>%filter(mgs.V2%in%select.mgs),mgs.V2~Ms,value.var = "p.value")
+#
+rownames(sum.Ms.wilcox.matrix) <- sum.Ms.wilcox.matrix[,1]
+sum.Ms.wilcox.matrix <- sum.Ms.wilcox.matrix[,-1]
+
+sum.Ms.sign.matrix <- sum.Ms.wilcox.matrix[which(sum.Ms.wilcox.matrix[,1]<0.05),]
+
+sum.Ms.sign.matrix <- apply(sum.Ms.sign.matrix,1:2,function(x) ifelse(is.na(x),1,x))
+
+phm0 <- pheatmap(sum.Ms.sign.matrix,cluster_rows = T,cluster_cols = F,
+         color=colorRampPalette(brewer.pal(n = 11, name ="RdGy"))(11),
+         breaks=rev(c(1,0.7,0.5,0.2,0.1,0.05,0.01,0.005,0.001,0.0005,0))
+)
+
+signifFun <- function(d){
+  pcheck <- d$p.value[d$Ms=="M0"] <0.05 & (d$p.value[d$Ms=="M2"] <0.05|d$p.value[d$Ms=="M3"] <0.05)
+  echeck <- length(unique(d$Enrich[d$Ms%in%c("M0","M2","M3")])) == 1 && !is.na(unique(d$Enrich[d$Ms%in%c("M0","M2","M3")]))
+  if(pcheck & echeck){
+    return(d[1,])
+  }
+}
+
+```
+
+
+```{r}
+ggplot(sum.Ms.wilcox.df%>%filter(Pct>20&Occ.>0.2),
+       aes(x=adj.pval,color=Ms)) + geom_density()
+```
+
+
+**median value**
+```{r}
+deficientFun <- function(d,p){
+  ind <- which(d[p+1:3]==min(d[p+1:3]))
+  if(length(ind)==1){
+    d$deficient <- sub("median.","",colnames(d)[p+ind])
+  }else{
+    d$deficient <- NA
+  }
+  return(d)
+}
+#p=9 for 'anova', p=10 for 'wilcox'
+sum.Ms.wilcox.df <- ddply(sum.Ms.wilcox.df,c("Ms","mgs.V2"),deficientFun,9)
+PD.Ms.median.matrix <- dcast(sum.Ms.wilcox.df,mgs.V2~Ms,value.var = "median.PD")
+SD.Ms.median.matrix <- dcast(sum.Ms.wilcox.df,mgs.V2~Ms,value.var = "median.SD")
+PR.Ms.median.matrix <- dcast(sum.Ms.wilcox.df,mgs.V2~Ms,value.var = "median.PR")
+#
+sum.Ms.median.matrix <- cbind(PD.Ms.median.matrix,SD.Ms.median.matrix[,-1],PR.Ms.median.matrix[,-1])
+colnames(sum.Ms.median.matrix)[2:19] <- paste0(rep(c("PD","SD","PR"),each=6),colnames(sum.Ms.median.matrix)[2:19])
+rownames(sum.Ms.median.matrix) <- sum.Ms.median.matrix[,1]
+sum.Ms.median.matrix <- sum.Ms.median.matrix[,-1]
+
+sum.Ms.median.matrix <- apply(sum.Ms.median.matrix,1:2,function(x) ifelse(is.na(x),0,x))
+sum.Ms.median.matrix <- apply(sum.Ms.median.matrix,1:2,function(x) ifelse(x==0,-10,log10(x)))
+#
+PD.Ms.signif.matrix <- dcast(sum.Ms.wilcox.df%>%filter(Enrich=="PD"),
+                             mgs.V2~Ms,value.var = "p.value")
+SD.Ms.signif.matrix <- dcast(sum.Ms.wilcox.df%>%filter(Enrich=="SD"),
+                             mgs.V2~Ms,value.var = "p.value")
+PR.Ms.signif.matrix <- dcast(sum.Ms.wilcox.df%>%filter(Enrich=="PR"),
+                             mgs.V2~Ms,value.var = "p.value")
+#
+PD.Ms.deficient.matrix <- dcast(sum.Ms.wilcox.df%>%filter(deficient=="PD"&p.value<0.05),
+                             mgs.V2~Ms,value.var = "deficient")
+SD.Ms.deficient.matrix <- dcast(sum.Ms.wilcox.df%>%filter(deficient=="SD"&p.value<0.05),
+                             mgs.V2~Ms,value.var = "deficient")
+PR.Ms.deficient.matrix <- dcast(sum.Ms.wilcox.df%>%filter(deficient=="PR"&p.value<0.05),
+                             mgs.V2~Ms,value.var = "deficient")
+
+#
+sum.Ms.signif.matrix <- matrix(NA,ncol=ncol(sum.Ms.median.matrix),
+                               nrow=nrow(sum.Ms.median.matrix),
+                               dimnames=dimnames(sum.Ms.median.matrix))
+#
+sum.Ms.signif.matrix[PD.Ms.deficient.matrix$mgs.V2,  1:6] <- ifelse(PD.Ms.deficient.matrix[,-1]=="PD","-")
+sum.Ms.signif.matrix[SD.Ms.deficient.matrix$mgs.V2, 7:12] <- ifelse(SD.Ms.deficient.matrix[,-1]=="SD","-")
+sum.Ms.signif.matrix[PR.Ms.deficient.matrix$mgs.V2,13:18] <- ifelse(PR.Ms.deficient.matrix[,-1]=="PR","-")
+#
+sum.Ms.signif.matrix[PD.Ms.signif.matrix$mgs.V2,  1:6] <- ifelse(
+  PD.Ms.signif.matrix[,-1]<0.05,"*",sum.Ms.signif.matrix[PD.Ms.signif.matrix$mgs.V2,  1:6])
+sum.Ms.signif.matrix[SD.Ms.signif.matrix$mgs.V2, 7:12] <- ifelse(
+  SD.Ms.signif.matrix[,-1]<0.05,"*",sum.Ms.signif.matrix[SD.Ms.signif.matrix$mgs.V2, 7:12])
+sum.Ms.signif.matrix[PR.Ms.signif.matrix$mgs.V2,13:18] <- ifelse(
+  PR.Ms.signif.matrix[,-1]<0.05,"*",sum.Ms.signif.matrix[PR.Ms.signif.matrix$mgs.V2,13:18])
+
+#
+sum.Ms.signif.matrix <- apply(sum.Ms.signif.matrix,1:2,function(x) ifelse(is.na(x),"",x))
+
+#
+phMd <- pheatmap(sum.Ms.median.matrix[rownames(sum.Ms.sign.matrix),],
+         cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),
+         display_numbers = sum.Ms.signif.matrix[rownames(sum.Ms.sign.matrix),]
+)
+
+phm.hrow.label <- data.frame(hclust=cutree(phMd$tree_row,k=4))
+phm.hrow.label$hclust <- as.factor(phm.hrow.label$hclust)
+
+phm.row.order <- phMd$tree_row$labels[phMd$tree_row$order]
+
+sum.sign.anno <- merge(sum.Ms.BE3.test$M0%>%filter(mgs.V2%in%phm.row.order),
+                       mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+rownames(sum.sign.anno) <- sum.sign.anno$mgs.V2
+sum.sign.anno <- sum.sign.anno[phm.row.order,]
+if(do.write){
+  write.csv(sum.sign.anno,file="../../Result/TEST/timeSeries/mgs.anova.sum.ms.sgin.anno.csv")
+}
+```
+
+**show enriched**
+```{r}
+pick.mgs <- sum.Ms.wilcox.df%>%filter(Ms=="M0"&mgs.V2%in%phm.row.order&Pct>=5)
+pick.mgs.PD <- pick.mgs%>%filter(Enrich=="PD")
+order.mgs.PD <- reorder(pick.mgs.PD$mgs.V2,pick.mgs.PD$median.PD,mean)
+pick.mgs.SD <- pick.mgs%>%filter(Enrich=="SD")
+order.mgs.SD <- reorder(pick.mgs.SD$mgs.V2,pick.mgs.SD$median.SD,mean)
+pick.mgs.PR <- pick.mgs%>%filter(Enrich=="PR")
+order.mgs.PR <- reorder(pick.mgs.PR$mgs.V2,pick.mgs.PR$median.PR,mean)
+
+visual.mgs <- c(rev(levels(order.mgs.PR)),rev(levels(order.mgs.SD)),rev(levels(order.mgs.PD)))
+visual.gap <- cumsum(c(length(levels(order.mgs.PR)),length(levels(order.mgs.SD)),length(levels(order.mgs.PD))))
+phMdv <- pheatmap(sum.Ms.median.matrix[visual.mgs,],
+         cluster_rows = F,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),gaps_row=visual.gap,
+         display_numbers = sum.Ms.signif.matrix[visual.mgs,]
+)
+phMdv
+if(do.write){
+  ggsave(phMdv,width=8,height=8,
+       filename="../../Result/TEST/timeSeries/mgs.anova.Ms.pheatmap.pdf")
+}
+```
+
+**stat of HSDturkey**
+```{r}
+pick.HSD.df <- melt(pick.mgs,id.vars = "mgs.V2",measure.vars = c("SD.PD","PR.PD","PR.SD"),variable.name = "comparison",value.name = "p.val" )
+ggplot(pick.HSD.df,aes(x=p.val,fill=comparison)) + geom_histogram(position="dodge") + 
+  geom_vline(xintercept = 0.05,linetype=2) + theme_bw()
+ggsave(width=8,height=3,
+  filename = "../../Result/TEST/timeSeries/mgs.anova.HSDturkey.pval.pdf")
+```
+
+###Ws significant values
+```{r}
+sum.Ws.wilcox.df <- rbind(
+  cbind(Ws="W0",sum.Ws.BE3.test$W0),
+  cbind(Ws="W1",sum.Ws.BE3.test$W1),
+  cbind(Ws="W2",sum.Ws.BE3.test$W2),
+  cbind(Ws="W4",sum.Ws.BE3.test$W4),
+  cbind(Ws="W6",sum.Ws.BE3.test$W6),
+  cbind(Ws="W8",sum.Ws.BE3.test$W8),
+  cbind(Ws="W10",sum.Ws.BE3.test$W10),
+  cbind(Ws="W12",sum.Ws.BE3.test$W12),
+  cbind(Ws="W16",sum.Ws.BE3.test$W16)
+)
+
+sum.Ws.wilcox.df$p.value <- sum.Ws.wilcox.df$ori.pval
+sum.Ws.wilcox.matrix <- dcast(sum.Ws.wilcox.df,mgs.V2~Ws,value.var = "p.value")
+rownames(sum.Ws.wilcox.matrix) <- sum.Ws.wilcox.matrix[,1]
+sum.Ws.wilcox.matrix <- sum.Ws.wilcox.matrix[phm.row.order,-1]
+sum.Ws.wilcox.matrix <- apply(sum.Ws.wilcox.matrix,1:2,function(x) ifelse(is.na(x),1,x))
+
+# median value
+PD.Ws.median.matrix <- dcast(sum.Ws.wilcox.df,mgs.V2~Ws,value.var = "median.PD")
+SD.Ws.median.matrix <- dcast(sum.Ws.wilcox.df,mgs.V2~Ws,value.var = "median.SD")
+PR.Ws.median.matrix <- dcast(sum.Ws.wilcox.df,mgs.V2~Ws,value.var = "median.PR")
+# combine and trans to log10 scale
+sum.Ws.median.matrix <- cbind(PD.Ws.median.matrix,SD.Ws.median.matrix[,-1],PR.Ws.median.matrix[,-1])
+colnames(sum.Ws.median.matrix)[2:28] <- paste0(rep(c("PD","SD","PR"),each=9),colnames(sum.Ws.median.matrix)[2:28])
+rownames(sum.Ws.median.matrix) <- sum.Ws.median.matrix[,1]
+sum.Ws.median.matrix <- sum.Ws.median.matrix[,-1]
+sum.Ws.median.matrix <- apply(sum.Ws.median.matrix,1:2,function(x) ifelse(is.na(x),0,x))
+sum.Ws.median.matrix <- apply(sum.Ws.median.matrix,1:2,function(x) ifelse(x==0,-10,log10(x)))
+#
+PD.Ws.signif.matrix <- dcast(sum.Ws.wilcox.df%>%filter(Enrich=="PD"),mgs.V2~Ws,value.var = "p.value")
+SD.Ws.signif.matrix <- dcast(sum.Ws.wilcox.df%>%filter(Enrich=="SD"),mgs.V2~Ws,value.var = "p.value")
+PR.Ws.signif.matrix <- dcast(sum.Ws.wilcox.df%>%filter(Enrich=="PR"),mgs.V2~Ws,value.var = "p.value")
+sum.Ws.signif.matrix <- matrix(NA,ncol=ncol(sum.Ws.median.matrix),
+                               nrow=nrow(sum.Ws.median.matrix),
+                               dimnames=dimnames(sum.Ws.median.matrix))
+sum.Ws.signif.matrix[PD.Ws.signif.matrix$mgs.V2, 0 + 1:9] <- ifelse(PD.Ws.signif.matrix[,-1]<0.05,"*",NA)
+sum.Ws.signif.matrix[SD.Ws.signif.matrix$mgs.V2, 9 + 1:9] <- ifelse(SD.Ws.signif.matrix[,-1]<0.05,"*",NA)
+sum.Ws.signif.matrix[PR.Ws.signif.matrix$mgs.V2,18 + 1:9] <- ifelse(PR.Ws.signif.matrix[,-1]<0.05,"*",NA)
+
+sum.Ws.signif.matrix <- apply(sum.Ws.signif.matrix[phm.row.order,],1:2,function(x) ifelse(is.na(x),"",x))
+
+phWd <- pheatmap(sum.Ws.median.matrix[phm.row.order,],cluster_rows = F,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(9,18),display_numbers = sum.Ws.signif.matrix,
+         #breaks=rev(c(1,0.7,0.5,0.2,0.1,0.05,0.01,0.005,0.001,0.0005,0))
+)
+phWd
+```
+
+
+**test rand BE3**
+```{r}
+pick.rand.100 <- p.val.stat.df%>%filter(mean.pval<0.05&mean.occ>.2)
+pick.rand.100.mat <- apply(sum.Ms.wilcox.matrix,1:2,function(x) ifelse(is.na(x),1,x))
+pick.rand.100.mgs <- as.character(pick.rand.100$mgs.V2)
+
+
+phMd.r <- pheatmap(sum.Ms.median.matrix[pick.rand.100.mgs,],
+         cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),
+         display_numbers = sum.Ms.signif.matrix[pick.rand.100.mgs,]
+)
+phMd.r
+
+phMd.hrow.label <- data.frame(hclust=cutree(phMd.r$tree_row,k=4))
+phMd.hrow.label$hclust <- as.factor(phMd.hrow.label$hclust)
+
+phMd.row.order <- phMd.r$tree_row$labels[phMd.r$tree_row$order]
+
+phMd.r.sum.sign.anno <- merge(sum.Ms.BE3.test$M0%>%filter(mgs.V2%in%phMd.row.order),
+                       mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+rownames(phMd.r.sum.sign.anno) <- phMd.r.sum.sign.anno$mgs.V2
+phMd.r.sum.sign.anno <- phMd.r.sum.sign.anno[phMd.row.order,]
+
+#visual
+mgs.pct20 <- mgs.V2.anno2$mgs.V2[which(mgs.V2.anno2$Pct>20)]
+pick.rand.100.mgs.pct20 <- intersect(pick.rand.100.mgs,mgs.pct20)
+phMd.r2 <- pheatmap(sum.Ms.median.matrix[pick.rand.100.mgs.pct20,],
+         cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),
+         display_numbers = sum.Ms.signif.matrix[pick.rand.100.mgs.pct20,],
+         filename = "../../Result/TEST/timeSeries/phMd.r2.pdf",width = 5.5,height=5,
+)
+phMd.r2
+phMd.r2.label <- data.frame(hclust=cutree(phMd.r2$tree_row,k=3))
+phMd.r2.label$hclust <- as.factor(phMd.r2.label$hclust)
+phMd.r2.order <- phMd.r2$tree_row$labels[phMd.r2$tree_row$order]
+
+if(do.write){
+  write.csv(phMd.r.sum.sign.anno,file="../../Result/TEST/timeSeries/mgs.sum.phmd.gin.anno.csv")
+  write.csv(phMd.r.sum.sign.anno[phMd.r2.order,],
+            file="../../Result/TEST/timeSeries/mgs.sum.phmd.pct20.anno.csv")
+}
+```
+
+
+**test rand BE2**
+```{r}
+pick.rand.100.BE2 <- BE2.p.val.stat.df%>%filter(mean.pval<0.05&mean.occ>.2)
+
+BE2.rand.100.mgs <- as.character(pick.rand.100.BE2$mgs.V2)
+
+BE2.phMd <- pheatmap(sum.Ms.median.matrix[BE2.rand.100.mgs,],
+         cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),
+         display_numbers = sum.Ms.signif.matrix[BE2.rand.100.mgs,]
+)
+BE2.phMd
+
+BE2.phMd.hrow.label <- data.frame(hclust=cutree(BE2.phMd$tree_row,k=4))
+BE2.phMd.hrow.label$hclust <- as.factor(BE2.phMd.hrow.label$hclust)
+
+BE2.phMdow.order <- BE2.phMd$tree_row$labels[BE2.phMd$tree_row$order]
+
+BE2.phMd.sum.sign.anno <- merge(sum.Ms.BE3.test$M0%>%filter(mgs.V2%in%BE2.phMdow.order),
+                       mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+rownames(BE2.phMd.sum.sign.anno) <- BE2.phMd.sum.sign.anno$mgs.V2
+BE2.phMd.sum.sign.anno <- BE2.phMd.sum.sign.anno[BE2.phMdow.order,]
+if(do.write){
+  write.csv(BE2.phMd.sum.sign.anno,file="../../Result/TEST/timeSeries/mgs.sum.BE2.phMd.gin.anno.csv")
+}
+```
+
+**test rand PDPR**
+```{r}
+if(file.exists(paste0("../../Result/TEST/rand.base.wilcox.PDPR.",set.rand.time,".RData"))){
+  load(paste0("../../Result/TEST/rand.base.wilcox.PDPR.",set.rand.time,".RData"))
+}else{
+  #
+  PDPR.base.phe <- all.base.phe%>%filter(BE3!="SD")
+  PDPR.base.phe$BE3 <- droplevels(PDPR.base.phe$BE3)
+  cl <- makeCluster(5)
+  clusterExport(cl,c("ttFun","PDPR.base.phe","rand.pick.base.phe","sp.prf","mgs.V2.anno2"))
+  rand.pick.base.PDPR <- parSapply(cl,1:set.rand.time,FUN=function(x){
+    library(dplyr);library(plyr);
+    ttFun(sp.prf[,as.character(rand.pick.base.phe[[x]]$DNAID)],
+      PDPR.base.phe[which(all.base.phe$DNAID%in%rand.pick.base.phe[[x]]$DNAID),],
+      "DNAID","BE3",NULL,ex.0=F)
+  },simplify = F)
+  stopCluster(cl)
+  save(rand.pick.base.phe, rand.pick.base.PDPR,
+       file=paste0("../../Result/TEST/rand.base.wilcox.PDPR.",set.rand.time,".RData"))
+}
+
+PDPR.p.val.stat <- sapply(rand.pick.base.PDPR, "[[", "p.value")
+PDPR.occ.stat <- sapply(rand.pick.base.PDPR, "[[", "Occ.")
+PDPR.enrich.stat <- sapply(rand.pick.base.PDPR, "[[", "Enrich")
+PDPR.p.val.stat.df <- data.frame(
+  mgs.V2=rand.pick.base.PDPR[[1]]$mgs.V2,
+  mean.pval=rowMeans(PDPR.p.val.stat),
+  mean.occ=rowMeans(PDPR.occ.stat),
+  enrich = unlist(apply(PDPR.enrich.stat,1,function(x) {
+    tb <- rev(sort(table(x)))[1]
+    if(is.na(tb)){return(NA)}else{return(names(tb))}})),
+  sign.freq=apply(PDPR.p.val.stat,1,function(x) length(which(x<0.05)))
+)
+
+ggplot(PDPR.p.val.stat.df%>%filter(sign.freq>0),aes(x=mean.pval,y=sign.freq,size=mean.occ)) + 
+  geom_vline(xintercept = 0.05) +
+  geom_point(alpha=.2) + scale_x_log10() + scale_y_continuous(breaks=seq(0,100,10))
+
+sign.PDPR.mgs <- (PDPR.p.val.stat.df%>%filter(sign.freq==100&mean.pval<0.05))$mgs.V2
+#step2
+pick.rand.100.PDPR <- PDPR.p.val.stat.df%>%filter(mean.pval<0.05&mean.occ>.2)
+
+PDPR.rand.100.mgs <- as.character(pick.rand.100.PDPR$mgs.V2)
+
+PDPR.phMd <- pheatmap(sum.Ms.median.matrix[PDPR.rand.100.mgs,],
+         cluster_rows = T,cluster_cols = F,
+         color=c("#CCCCCC",colorRampPalette(brewer.pal(n = 11, name ="RdYlGn"))(11)),
+         gaps_col = c(6,12),
+         display_numbers = sum.Ms.signif.matrix[PDPR.rand.100.mgs,]
+)
+PDPR.phMd
+
+PDPR.phMd.hrow.label <- data.frame(hclust=cutree(PDPR.phMd$tree_row,k=4))
+PDPR.phMd.hrow.label$hclust <- as.factor(PDPR.phMd.hrow.label$hclust)
+
+PDPR.phMdow.order <- PDPR.phMd$tree_row$labels[PDPR.phMd$tree_row$order]
+
+PDPR.phMd.sum.sign.anno <- merge(sum.Ms.BE3.test$M0%>%filter(mgs.V2%in%PDPR.phMdow.order),
+                       mgs.V2.LPS.anno,by.x="mgs.V2",by.y="MGS")
+rownames(PDPR.phMd.sum.sign.anno) <- PDPR.phMd.sum.sign.anno$mgs.V2
+PDPR.phMd.sum.sign.anno <- PDPR.phMd.sum.sign.anno[PDPR.phMdow.order,]
+if(do.write){
+  write.csv(PDPR.phMd.sum.sign.anno,file="../../Result/TEST/timeSeries/mgs.sum.PDPR.phMd.gin.anno.csv")
+}
+```
+#individual mgs visual
+
+```{r,warning=FALSE}
+select.MGS <- mgs.V2.anno2$mgs.V2[which(mgs.V2.anno2$Pct>5)]
+#select.MGS <- mgs.pct20
+select.df <- melt(data.frame(MGS=select.MGS,sp.prf[select.MGS,]),
+                   id.vars = "MGS",variable.name = "DNAID",value.name = "Abundance")
+select.df <- merge(merge(merge(select.df,FDNA.NPC.pick3,by="DNAID"),
+                         phMd.r.sum.sign.anno,by.x="MGS",by.y="mgs.V2"),
+                   phMd.r2.label,by.x="MGS",by.y="row.names")
+select.df$Abundance[which(select.df$Abundance==0)] <- 1e-10
+select.df$MGS <- reorder(select.df$MGS,-select.df$Abundance,median)
+select.df$MainTax <- reorder(select.df$MainTax,-select.df$Abundance,median)
+
+psa<- ggplot(select.df,aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
+  stat_compare_means(label="p.signif") +
+  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=4,scale="free",labeller = label_both) + 
+  scale_fill_brewer(palette = "Set1")
+psa
+
+psSD<- ggplot(select.df%>%filter(Enrich=="SD"),aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
+  stat_compare_means(label="p.signif") + 
+  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=1,scale="free") + guides(fill=F) +
+  scale_fill_brewer(palette = "Set1") + theme_bw()
+psSD
+psPR<- ggplot(select.df%>%filter(Enrich=="PR"),aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
+  stat_compare_means(label="p.signif") + guides(fill=F) + theme_bw() +
+  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=3,scale="free") + scale_fill_brewer(palette = "Set1")
+psPR
+
+psPD<- ggplot(select.df%>%filter(Enrich=="PD"),aes(x=Ms,y=Abundance,fill=BE3)) + geom_boxplot() +
+  stat_compare_means(label="p.signif") + theme_bw() +
+  scale_y_log10() + facet_wrap(MGS~MainTax,ncol=1,scale="free") + scale_fill_brewer(palette = "Set1")
+psPD
+
+psc <- pheatmap(apply(sp.prf[select.MGS,as.character(tsALL.phe$DNAID)],
+               1:2,function(x) return(ifelse(x==0,-10,log10(x)))),
+         cluster_cols=F,cluster_rows = F,
+         gaps_col = cumsum(table(tsALL.phe$BE3)),
+         annotation_col = tsALL.phe[,c("Ws","BE3"),F])
+         #annotation_row = ts36.anno[,c("Enrich","Phylum"),F])
+
+if(do.write){
+  ggsave(psa,file="../../Result/TEST/timeSeries/summary.marker.abun.pdf",width=4,height=10)
+  ggsave(psPD,file="../../Result/TEST/timeSeries/EnrichPD.marker.abun.pdf",width=5,height=8)
+  ggsave(psSD,file="../../Result/TEST/timeSeries/EnrichSD.marker.abun.pdf",width=4,height=8)
+  ggsave(psPR,file="../../Result/TEST/timeSeries/EnrichPR.marker.abun.pdf",width=12,height=8)
+}
+```
+
+```{r}
+#occ test
+occFun <- function(d,cut){
+  if(sum(d$Abundance[which(d$Ws!=0)])>=cut&sum(d$Abundance[which(d$Ws==0)])<cut){
+    d$occStatus <- "newcomer"
+  }else{
+    d$occStatus <- "native"
+  }
+  if(sum(d$Abundance[which(d$Ws!=0)])<cut&sum(d$Abundance[which(d$Ws==0)])>=cut){
+    d$lastStatus <- "disapear"
+  }else{
+    d$lastStatus <- "stay"
+  }
+  return(d[1,])
+}
+#all.mgs.df <- melt(data.frame(MGS=rownames(sp.prf),sp.prf),
+                   id.vars = "MGS",variable.name = "DNAID",value.name = "Abundance")
+#all.mgs.df <- merge(merge(all.mgs.df,tsALL.phe,by="DNAID"),ts36.anno,by="MGS")
+
+#all.mgs.df2 <- ddply(all.mgs.df,c("MGS","PID"),occFun,5e-7)
+```
+
+```{r}
+merge.df1 <- ddply(select.df%>%filter(hclust==1),colnames(select.df)[c(2,4:33)],
+                   summarise,Abundance=median(Abundance))
+ggplot(merge.df1,aes(x=BE3,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~Ws,ncol=6)
+ggplot(select.df%>%filter(hclust==1),aes(x=Ws,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=6)
+```
+
+```{r}
+
+merge.df2 <- ddply(select.df%>%filter(hclust==2),colnames(select.df)[c(2,4:33)],
+                   summarise,Abundance=median(Abundance))
+ggplot(merge.df2,aes(x=BE3,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~Ws,ncol=6)
+ggplot(select.df%>%filter(hclust==2),aes(x=Ws,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=3)
+```
+```{r}
+
+merge.df3 <- ddply(select.df%>%filter(hclust==3),colnames(select.df)[c(2,4:33)],
+                   summarise,Abundance=median(Abundance))
+ggplot(merge.df3,aes(x=BE3,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~Ws,ncol=6)
+ggplot(select.df%>%filter(hclust==3),aes(x=Ws,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=6)
+```
+
+```{r}
+merge.df4 <- ddply(select.df%>%filter(hclust==4),colnames(select.df)[c(2,4:33)],
+                   summarise,Abundance=median(Abundance))
+ggplot(merge.df4,aes(x=BE3,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~Ws,ncol=6)
+ggplot(select.df%>%filter(hclust==4),aes(x=Ws,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=6)
+```
+
+```{r}
+merge.df5 <- ddply(select.df%>%filter(hclust==5),colnames(select.df)[c(2,4:33)],
+                   summarise,Abundance=mean(Abundance))
+ggplot(merge.df5,aes(x=BE3,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~Ws,ncol=6)
+ggplot(select.df%>%filter(hclust==5),aes(x=Ws,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=5)
+```
+
+**export mgs markers**
+```{r}
+mgs.comm0and36.base <- merge(ts0.sign.anno,ts36.BE3.in0.sign5,
+  by.y="mgs.V2",by.x="MGS")
+mgs.comm0and36.base.marker <- intersect(ts36.BE3.in0.sign5$mgs.V2,ts0.sign.anno$MGS)
+mgs.t36.marker <- ts36.BE3.in0.sign5$mgs.V2
+```
+
+
+# try pub data
+```{r}
+pub.mgs.prf <- read.table("../../Result/01.Profile/Pub_Caucasian/MGS.V2.Caucasian.219.profile")
+pub.phe <- read.csv("../../Result/Phenotype/phenotype.caucasian.csv",row.names = 1)
+pub.phe <- pub.phe%>%filter(BestEvaluation!="DD"&Tumor_Type=="NPC")
+pub.phe$BE3 <- factor(pub.phe$BestEvaluation,levels=c("PD","SD","PR"))
+pub.phe$MTimes <- as.factor(as.numeric(pub.phe$CTgrp) -1 )
+
+```
+
+```{r}
+pub00.phe <- pub.phe%>%filter(MTimes==0)
+pub00.phe <- pub00.phe[order(interaction(pub00.phe$MTimes,pub00.phe$BE3)),]
+rownames(pub00.phe) <- pub00.phe$DNAID
+pub00.prf <- pub.mgs.prf[,as.character(pub00.phe$DNAID)]
+pub00.BE3.in0.w <- tkFun(pub00.prf,pub00.phe,"DNAID","BE3",NULL,ex.0=F)
+pub00.BE3.in0.sign.MGS <- pub00.BE3.in0.w$mgs.V2[which(
+  pub00.BE3.in0.w$p.value<0.05&pub00.BE3.in0.w$Pct>50)]
+
+pub00.BE3.in0.w$Enrich <- factor(pub00.BE3.in0.w$Enrich,levels=c("PD","SD","PR"))
+mean.FDR <- mean(pub00.BE3.in0.w$FDR[!is.na(pub00.BE3.in0.w$FDR)])
+ggplot(pub00.BE3.in0.w,aes(x=p.value,fill=Enrich)) + geom_histogram(position="stack")
+
+pub00.anno <- merge(mgs.V2.LPS.anno[mgs.t36.marker,],
+                   pub00.BE3.in0.w[,c("mgs.V2","Enrich")],by.x="MGS",by.y="mgs.V2")
+pub00.anno <- merge(mgs.V2.LPS.anno[pub00.BE3.in0.sign.MGS,],
+                   pub00.BE3.in0.w[,c("mgs.V2","Enrich")],by.x="MGS",by.y="mgs.V2")
+if(do.write){
+  write.csv(pub00.BE3.in0.w,"../../Result/TEST/timeSeries/pub00.BE3.in0.w.csv")
+  write.csv(pub00.anno,"../../Result/TEST/timeSeries/pub00.anno.csv")
+}
+rownames(pub00.anno) <- pub00.anno$MGS
+
+pub00.sign.prf <- pub00.prf[mgs.t36.marker,]
+pub00.sign.prf <- pub00.prf[pub00.BE3.in0.sign.MGS,]
+pub00.sign.prf.lg <- apply(pub00.sign.prf,1:2,function(x) return(ifelse(x<5e-10,-10,log10(x))))
+
+phot00 <- pheatmap(pub00.sign.prf.lg,cluster_cols=F,clustering_method = "complete",
+         annotation_col = pub00.phe[,c("CTgrp","BE3"),F],
+         annotation_row = pub00.anno[,c("Enrich","Phylum"),F])
+
+phot00.hrow.label <- data.frame(hclust=cutree(phot00$tree_row,k=5))
+phot00.hrow.label$hclust <- as.factor(phot00.hrow.label$hclust)
+
+phot00.row.order <- phot00$tree_row$labels[phot00$tree_row$order]
+
+Phot00 <- pheatmap(apply(sp.prf[phot00.row.order,as.character(tsALL.phe$DNAID)],
+               1:2,function(x) return(ifelse(x==0,-10,log10(x)))),
+         cluster_cols=F,cluster_rows = F,
+         annotation_col = tsALL.phe[,c("Ws","BE3"),F],
+         annotation_row = pub00.anno[,c("Enrich","Phylum"),F])
+
+```
+
+```{r}
+pub12.phe <- pub.phe%>%filter(MTimes%in%c(1,2))
+pub12.phe <- pub12.phe[order(interaction(pub12.phe$MTimes,pub12.phe$BE3)),]
+rownames(pub12.phe) <- pub12.phe$DNAID
+pub12.prf <- pub.mgs.prf[,as.character(pub12.phe$DNAID)]
+pub12.BE3.in0.w <- tkFun(pub12.prf,pub12.phe,"DNAID","BE3",NULL,ex.0=F)
+pub12.BE3.in0.sign.MGS <- pub12.BE3.in0.w$mgs.V2[which(
+  pub12.BE3.in0.w$p.value<0.05&pub12.BE3.in0.w$Pct>50&pub12.BE3.in0.w$Occ.>.2)]
+
+pub12.BE3.in0.w$Enrich <- factor(pub12.BE3.in0.w$Enrich,levels=c("PD","SD","PR"))
+mean.FDR <- mean(pub12.BE3.in0.w$FDR[!is.na(pub12.BE3.in0.w$FDR)])
+ggplot(pub12.BE3.in0.w,aes(x=p.value,fill=Enrich)) + geom_histogram(position="stack")
+
+pub12.anno <- merge(mgs.V2.LPS.anno[pub12.BE3.in0.sign.MGS,],
+                   pub12.BE3.in0.w[,c("mgs.V2","Enrich")],by.x="MGS",by.y="mgs.V2")
+if(do.write){
+  write.csv(pub12.BE3.in0.w,"../../Result/TEST/timeSeries/pub12.BE3.in0.w.csv")
+  write.csv(pub12.anno,"../../Result/TEST/timeSeries/pub12.anno.csv")
+}
+rownames(pub12.anno) <- pub12.anno$MGS
+
+pub12.sign.prf <- pub12.prf[pub12.BE3.in0.sign.MGS,]
+pub12.sign.prf.lg <- apply(pub12.sign.prf,1:2,function(x) return(ifelse(x==0,-10,log10(x))))
+
+phot12 <- pheatmap(pub12.sign.prf.lg,cluster_cols=F,clustering_method = "complete",
+         annotation_col = pub12.phe[,c("CTgrp","BE3"),F],
+         annotation_row = pub12.anno[,c("Enrich","Phylum"),F])
+
+phot12.hrow.label <- data.frame(hclust=cutree(phot12$tree_row,k=5))
+phot12.hrow.label$hclust <- as.factor(phot12.hrow.label$hclust)
+
+row.order <- p$tree_row$labels[p$tree_row$order]
+
+Phot12 <- pheatmap(apply(sp.prf[row.order,tsALL.phe$DNAID],
+               1:2,function(x) return(ifelse(x==0,-10,log10(x)))),
+         cluster_cols=F,cluster_rows = F,
+         annotation_col = tsALL.phe[,c("Ws","BE3"),F],
+         annotation_row = pub12.anno[,c("Enrich","Phylum"),F])
+
+```
+
+# compare two cohorts
+```{r}
+cc0.phe <- rbind(
+  cbind(cohort="Caucasion",pub00.phe[,c("BE3"),F]),
+  cbind(cohort="Chinese",ts0.phe[,c("BE3"),F]))
+cc0.sign.prf <- cbind(pub00.prf[mgs.t36.marker,],ts0.prf[mgs.t36.marker,])
+#cc0.sign.prf.lg <- apply(cc0.sign.prf,1:2,function(x) return(ifelse(x==0,-10,log10(x))))
+#
+cc0.phe <- rbind(
+  cbind(cohort="Caucasion",pub00.phe[,c("BE3"),F]),
+  cbind(cohort="Chinese",ts0.phe[,c("BE3"),F]))
+cc0.sign.prf <- cbind(pub00.prf[p36.row.order,],
+                      ts0.prf[p36.row.order,])
+cc0.sign.prf.lg <- apply(cc0.sign.prf,1:2,function(x) return(ifelse(x<1e-8,-10,log10(x))))
+
+#
+photcc0 <- pheatmap(cc0.sign.prf.lg,cluster_cols=F,cluster_rows=F,
+         annotation_col = cc0.phe,
+         annotation_row = mgs.V2.LPS.anno[,c("Phylum"),F])
+
+
+cc0.merge.df0 <- melt(data.frame(MGS=rownames(cc0.sign.prf),cc0.sign.prf),
+                   id.vars = "MGS",variable.name = "DNAID",value.name = "Abundance")
+cc0.merge.df <- merge(cc0.merge.df0,cc0.phe,by.x="DNAID",by.y="row.names")
+ggplot(cc0.merge.df,aes(x=cohort,y=Abundance,fill=BE3)) + geom_boxplot() +
+  scale_y_log10() + facet_wrap(~MGS,ncol=6)
+
+
+
+```
+
+```{r}
+mypcoa <- function (D, correction = "none", rn = NULL) 
+{
+  centre <- function(D, n) {
+    One <- matrix(1, n, n)
+    mat <- diag(n) - One/n
+    mat.cen <- mat %*% D %*% mat
+  }
+  bstick.def <- function(n, tot.var = 1, ...) {
+    res <- rev(cumsum(tot.var/n:1)/n)
+    names(res) <- paste("Stick", seq(len = n), sep = "")
+    return(res)
+  }
+  D <- as.matrix(D)
+  n <- nrow(D)
+  epsilon <- sqrt(.Machine$double.eps)
+  if (length(rn) != 0) {
+    names <- rn
+  }
+  else {
+    names <- rownames(D)
+  }
+  CORRECTIONS <- c("none", "lingoes", "cailliez")
+  correct <- pmatch(correction, CORRECTIONS)
+  if (is.na(correct)) 
+    stop("Invalid correction method")
+  delta1 <- centre((-0.5 * D^2), n)
+  trace <- sum(diag(delta1))
+  D.eig <- eigen(delta1)
+  min.eig <- min(D.eig$values)
+  zero.eig <- which(abs(D.eig$values) < epsilon)
+  D.eig$values[zero.eig] <- 0
+  if (min.eig > -epsilon) {
+    correct <- 1
+    eig <- D.eig$values
+    k <- length(which(eig > epsilon))
+    rel.eig <- eig[1:k]/trace
+    cum.eig <- cumsum(rel.eig)
+    vectors <- sweep(D.eig$vectors[, 1:k], 2, sqrt(eig[1:k]), 
+      FUN = "*")
+    bs <- bstick.def(k)
+    cum.bs <- cumsum(bs)
+    res <- data.frame(eig[1:k], rel.eig, bs, cum.eig, cum.bs)
+    colnames(res) <- c("Eigenvalues", "Relative_eig", "Broken_stick", 
+      "Cumul_eig", "Cumul_br_stick")
+    rownames(res) <- 1:nrow(res)
+    rownames(vectors) <- names
+    colnames(vectors) <- colnames(vectors, do.NULL = FALSE, 
+      prefix = "Axis.")
+    note <- paste("There were no negative eigenvalues. No correction was applied")
+    out <- (list(correction = c(correction, correct), note = note, 
+      values = res, vectors = vectors, trace = trace))
+  }
+  else {
+    k <- n
+    eig <- D.eig$values
+    rel.eig <- eig/trace
+    rel.eig.cor <- (eig - min.eig)/(trace - (n - 1) * min.eig)
+    #rel.eig.cor = c(rel.eig.cor[1:(zero.eig[1] - 1)], rel.eig.cor[(zero.eig[1] + 1):n], 0)
+    cum.eig.cor <- cumsum(rel.eig.cor)
+    k2 <- length(which(eig > epsilon))
+    k3 <- length(which(rel.eig.cor > epsilon))
+    vectors <- sweep(D.eig$vectors[, 1:k2], 2, sqrt(eig[1:k2]), 
+      FUN = "*")
+    if ((correct == 2) | (correct == 3)) {
+      if (correct == 2) {
+        c1 <- -min.eig
+        note <- paste("Lingoes correction applied to negative eigenvalues: D' = -0.5*D^2 -", 
+          c1, ", except diagonal elements")
+        D <- -0.5 * (D^2 + 2 * c1)
+      }
+      else if (correct == 3) {
+        delta2 <- centre((-0.5 * D), n)
+        upper <- cbind(matrix(0, n, n), 2 * delta1)
+        lower <- cbind(-diag(n), -4 * delta2)
+        sp.matrix <- rbind(upper, lower)
+        c2 <- max(Re(eigen(sp.matrix, symmetric = FALSE, 
+          only.values = TRUE)$values))
+        note <- paste("Cailliez correction applied to negative eigenvalues: D' = -0.5*(D +", 
+          c2, ")^2, except diagonal elements")
+        D <- -0.5 * (D + c2)^2
+      }
+      diag(D) <- 0
+      mat.cor <- centre(D, n)
+      toto.cor <- eigen(mat.cor)
+      trace.cor <- sum(diag(mat.cor))
+      min.eig.cor <- min(toto.cor$values)
+      zero.eig.cor <- which((toto.cor$values < epsilon) & 
+        (toto.cor$values > -epsilon))
+      toto.cor$values[zero.eig.cor] <- 0
+      if (min.eig.cor > -epsilon) {
+        eig.cor <- toto.cor$values
+        rel.eig.cor <- eig.cor[1:k]/trace.cor
+        cum.eig.cor <- cumsum(rel.eig.cor)
+        k2 <- length(which(eig.cor > epsilon))
+        vectors.cor <- sweep(toto.cor$vectors[, 1:k2], 
+          2, sqrt(eig.cor[1:k2]), FUN = "*")
+        rownames(vectors.cor) <- names
+        colnames(vectors.cor) <- colnames(vectors.cor, 
+          do.NULL = FALSE, prefix = "Axis.")
+        bs <- bstick.def(k2)
+        bs <- c(bs, rep(0, (k - k2)))
+        cum.bs <- cumsum(bs)
+      }
+      else {
+        if (correct == 2) 
+          cat("Problem! Negative eigenvalues are still present after Lingoes", 
+            "\n")
+        if (correct == 3) 
+          cat("Problem! Negative eigenvalues are still present after Cailliez", 
+            "\n")
+        rel.eig.cor <- cum.eig.cor <- bs <- cum.bs <- rep(NA, 
+          n)
+        vectors.cor <- matrix(NA, n, 2)
+        rownames(vectors.cor) <- names
+        colnames(vectors.cor) <- colnames(vectors.cor, 
+          do.NULL = FALSE, prefix = "Axis.")
+      }
+      res <- data.frame(eig[1:k], eig.cor[1:k], rel.eig.cor, 
+        bs, cum.eig.cor, cum.bs)
+      colnames(res) <- c("Eigenvalues", "Corr_eig", "Rel_corr_eig", 
+        "Broken_stick", "Cum_corr_eig", "Cum_br_stick")
+      rownames(res) <- 1:nrow(res)
+      rownames(vectors) <- names
+      colnames(vectors) <- colnames(vectors, do.NULL = FALSE, 
+        prefix = "Axis.")
+      out <- (list(correction = c(correction, correct), 
+        note = note, values = res, vectors = vectors, 
+        trace = trace, vectors.cor = vectors.cor, trace.cor = trace.cor))
+    }
+    else {
+      note <- "No correction was applied to the negative eigenvalues"
+      bs <- bstick.def(k3)
+      bs <- c(bs, rep(0, (k - k3)))
+      cum.bs <- cumsum(bs)
+      res <- data.frame(eig[1:k], rel.eig, rel.eig.cor, 
+        bs, cum.eig.cor, cum.bs)
+      colnames(res) <- c("Eigenvalues", "Relative_eig", 
+        "Rel_corr_eig", "Broken_stick", "Cum_corr_eig", 
+        "Cumul_br_stick")
+      rownames(res) <- 1:nrow(res)
+      rownames(vectors) <- names
+      colnames(vectors) <- colnames(vectors, do.NULL = FALSE, 
+        prefix = "Axis.")
+      out <- (list(correction = c(correction, correct), 
+        note = note, values = res, vectors = vectors, 
+        trace = trace))
+    }
+  }
+  class(out) <- "pcoa"
+  out
+}
+```
+
+```{r,warning=FALSE}
+library(phyloseq)
+#
+OTU <- otu_table(as.matrix(cc0.sign.prf),taxa_are_rows = TRUE)
+TAX <- tax_table(as.matrix(mgs.V2.LPS.anno[,-1]))
+SAM <- sample_data(cc0.phe)
+phyAll <- phyloseq(OTU,TAX,SAM)
+#
+OTU <- otu_table(as.matrix(ts46.prf[ts46.BE3.in0.sign5$mgs.V2,]),taxa_are_rows = TRUE)
+TAX <- tax_table(as.matrix(mgs.V2.LPS.anno[,-1]))
+SAM <- sample_data(ts46.phe)
+phyAll <- phyloseq(OTU,TAX,SAM)
+#
+#
+OTU <- otu_table(as.matrix(cc2.sign.prf[ts46.BE3.in0.sign5$mgs.V2,]),taxa_are_rows = TRUE)
+TAX <- tax_table(as.matrix(mgs.V2.LPS.anno[,-1]))
+SAM <- sample_data(cc2.phe)
+phyAll <- phyloseq(OTU,TAX,SAM)
+#
+dist_methods <- unlist(distanceMethodList)
+dist_methods <- dist_methods[-(1:3)]
+dist_methods = dist_methods[
+  -which(dist_methods%in%c("ANY","cao","altGower","raup","mountford"))]
+dist_methods <- "rlb"
+enterotype <- phyAll
+plist <- vector("list", length(dist_methods))
+names(plist) = dist_methods
+for( i in dist_methods ){
+    # Calculate distance matrix
+    iDist <- phyloseq::distance(enterotype, method=i)
+    # Calculate ordination
+    iMDS  <- ordinate(enterotype, "MDS", distance=iDist)
+    ## Make plot
+    # Don't carry over previous plot (if error, p will be blank)
+    p <- NULL
+    # Create plot, store as temp variable, p
+    p <- plot_ordination(enterotype, iMDS, color="BE3", shape="BE3")
+    # Add title to each plot
+    p <- p + ggtitle(paste("MDS using distance method ", i, sep=""))
+    # Save the graphic to file.
+    plist[[i]] = p
+}
+
+
+df = ldply(plist, function(x) x$data)
+names(df)[1] <- "distance"
+p = ggplot(df, aes(Axis.1, Axis.2, color=BE3,shape=cohort))
+p = p + geom_point(size=3, alpha=0.5) + stat_ellipse(aes(group=BE3))
+p = p + facet_wrap(~distance+cohort, scales="free")
+p = p + ggtitle("MDS on various distance metrics for Enterotype dataset")
+p
+
+##############################################################################
+cc0.phe <- rbind(
+  cbind(cohort="Caucasion",pub00.phe[,c("BE3"),F]),
+  cbind(cohort="Chinese",ts0.phe[,c("BE3"),F]))
+
+tmp.pick.marker <- ts0.sign.anno$MGS
+tmp.pick.marker <- ts46.BE3.in0.sign5$mgs.V2
+tmp.pick.marker <- intersect(ts46.BE3.in0.sign5$mgs.V2,ts0.sign.anno$MGS)
+
+cc0.sign.prf <- cbind(pub00.prf[tmp.pick.marker,],ts0.prf[tmp.pick.marker,])
+rlb.dist <- betadiver(t(cc0.sign.prf),method="rlb")
+pcoa_bray <- mypcoa(rlb.dist)
+pcoa_data <- data.frame(pcoa_bray$vectors[,c(1:3)])
+colnames(pcoa_data) <- c("PC1", "PC2","PC3")
+eig <- pcoa_bray$values[,1]
+pc1 <- eig[1]/sum(eig)*100
+pc2 <- eig[2]/sum(eig)*100
+pc3 <- eig[3]/sum(eig)*100
+
+pc1 <- paste0("PC1(",round(pc1,2),"%)")
+pc2 <- paste0("PC2(",round(pc2,2),"%)")
+pc3 <- paste0("PC3(",round(pc3,2),"%)")
+
+### merge data frame
+#rownames(cc2.phe) <- cc2.phe$DNAID
+pcoa_data2 <-merge(pcoa_data, cc0.phe, by = "row.names")
+
+ggplot(pcoa_data2,aes(x=PC1,y=PC2,color=BE3)) + geom_point() + facet_wrap(~cohort,ncol=4) +
+  coord_fixed() + theme(legend.position = "top") + stat_ellipse(aes(color=BE3)) +
+  xlab(pc1)+ylab(pc2)
+
+ggplot(pcoa_data2,aes(x=PC1,y=PC3,color=BE3)) + geom_point() + facet_wrap(~cohort,ncol=4) +
+  coord_fixed() + theme(legend.position = "top") + stat_ellipse(aes(color=BE3)) +
+  xlab(pc1)+ylab(pc3)
+```
+
+```{r}
+p = ggplot(df%>%filter(distance=="rlb"), aes(Axis.1, Axis.2, color=BE3,shape=cohort))
+p = p + geom_point(size=3, alpha=0.5) + stat_ellipse(aes(group=BE3))
+p = p + facet_wrap(~cohort, scales="free")
+p = p + ggtitle("MDS on various distance metrics for Enterotype dataset")
+p
+
+```
+
