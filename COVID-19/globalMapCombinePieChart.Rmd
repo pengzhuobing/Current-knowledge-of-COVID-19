@@ -15,7 +15,7 @@ library(dplyr)
 library(optmatch)
 library(REmap)
 library(data.table)
-dat<-read.csv("C:/Users/32601/Desktop/world_case 6.6.csv",header = T) #每百万人死亡率
+dat<-read.csv("./world_case 6.6.csv",header = T) #每百万人死亡率
 
 dat$color<-as.numeric(cut(dat$MRate, c(0, 0.1, 1, 10, 100,1000,10000)))
 dat$region<-dat$Area
@@ -25,7 +25,7 @@ leg.txt <- c(">0.01",">0.1",">1","10",">100",">1000")
 
 ##add genetypeInfo
 ```{r}
-gtinfo <- read.table("C:/Users/32601/Desktop/covid-19_genetype/gt6_1.txt",sep="\t")
+gtinfo <- read.table("./gt6_1.txt",sep="\t")
 inct<-c("USA","China","Russia","Brazil","Sweden","Finland","Germany","Denmark","Australia","England")
 chinact<-c("Anhui", "Beijing", "Fujian", "Fuyang", "Guangdong", "Hangzhou", "Hefei", "Hong Kong", "Jiangsu", "Jiangxi", "Jingzhou", "Jiujiang", "Lishui", "Nanchang", "Shandong", "Shanghai", "Shenzhen", "Sichuan", "Taiwan", "Wuhan", "Wuhan-Hu-1", "Xinyu", "Yunnan", "Zhejiang","Xinyu","Tianmen","Shangrao","NanChang","Lishui","Jiujiang","Jingzhou","Jiangxi")
 
