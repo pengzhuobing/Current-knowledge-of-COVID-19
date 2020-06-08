@@ -10,7 +10,6 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 
 # Load fucntions
-library("RColorBrewer")
 library(dplyr)
 library(optmatch)
 library(REmap)
@@ -46,14 +45,14 @@ sinfo.matrix$lat <- c(-25,-10.4,30,55,55,60,54,66,64,38)
 
 ```
 
-##ggplot画图
+##draw map
 ```{r}
-library(baidumap)
 library(ggplot2)  
 library(dplyr)  
 library(ggthemes)
 library(scatterpie)
 library(ggnewscale)
+
 world <- map_data("world")
 world <- world[world$region != "Antarctica",] # 剔除南极洲
 piecol<-c("#e5b751","#fb9968", "#f15642", "#c04851" ,"#d276a3", "#e2c17c", "#867e76")   #设置饼图颜色
@@ -75,10 +74,12 @@ m <- m+theme(
   ) + guides(fill = guide_legend(reverse = T))
   
 m <- m + new_scale("fill") + geom_scatterpie(aes(x=long,y=lat,group=V1,r=radius),data=sinfo.matrix,cols = c("G","GH","GR","L","O","S","V"),color=NA)+scale_fill_manual(values = piecol) + coord_equal() 
+
+ggsave(m, width=49,height=27,file=("./COVID-19globeMapCombinePie.plot.pdf"))
 ```
 
 
-###-----------------test---------------###
+###-----------------        test       ---------------###
 
 ##1.draw map
 ```{r,include=FALSE}
@@ -111,6 +112,6 @@ plotPie <- function(ct){
     theme(panel.border=element_blank())  
   #scale_fill_discrete(breaks = USA$V2, labels = label) 
   
-  ggsave(aa, width=1,height=1,file=paste0("C:/Users/32601/Desktop/COVIDplot/",tag,".pie.plot.pdf"))
+  ggsave(aa, width=1,height=1,file=paste0("./",tag,".pie.plot.pdf"))
 }
 ```
