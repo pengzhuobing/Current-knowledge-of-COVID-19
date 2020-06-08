@@ -12,6 +12,9 @@
  3.PCoA图
 > * 多组比较图
 
- 4. R Functions 
+4. R Functions 
 > * 随机森林分类器  randomForestFunctions.R
 > * 
+
+5. 地图
+>* 地图与饼图的组合图 
