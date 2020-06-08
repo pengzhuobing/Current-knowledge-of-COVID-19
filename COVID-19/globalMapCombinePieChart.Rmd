@@ -1,0 +1,116 @@
+---
+  title: "Global COVID-19"
+output:
+  html_notebook:
+  code_fold: hide
+
+---
+  
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load fucntions
+library("RColorBrewer")
+library(dplyr)
+library(optmatch)
+library(REmap)
+library(data.table)
+dat<-read.csv("C:/Users/32601/Desktop/world_case 6.6.csv",header = T) #每百万人死亡率
+
+dat$color<-as.numeric(cut(dat$MRate, c(0, 0.1, 1, 10, 100,1000,10000)))
+dat$region<-dat$Area
+color<-c("#EFEDF5","#DADAEB","#BCBDDC","#8c88b5","#665d9c","#4a2180") #设置地图颜色
+leg.txt <- c(">0.01",">0.1",">1","10",">100",">1000")
+```
+
+##add genetypeInfo
+```{r}
+gtinfo <- read.table("C:/Users/32601/Desktop/covid-19_genetype/gt6_1.txt",sep="\t")
+inct<-c("USA","China","Russia","Brazil","Sweden","Finland","Germany","Denmark","Australia","England")
+chinact<-c("Anhui", "Beijing", "Fujian", "Fuyang", "Guangdong", "Hangzhou", "Hefei", "Hong Kong", "Jiangsu", "Jiangxi", "Jingzhou", "Jiujiang", "Lishui", "Nanchang", "Shandong", "Shanghai", "Shenzhen", "Sichuan", "Taiwan", "Wuhan", "Wuhan-Hu-1", "Xinyu", "Yunnan", "Zhejiang","Xinyu","Tianmen","Shangrao","NanChang","Lishui","Jiujiang","Jingzhou","Jiangxi")
+
+for (i in 1:dim(gtinfo)[1]){
+  if (gtinfo[i,1]%in%chinact){
+    gtinfo[i,1] <- "China"
+  }
+}
+
+sinfo<-gtinfo%>%filter(V1%in%inct)
+sinfo.matrix <- dcast(sinfo,V1~V2) 
+sinfo.matrix$total <- sinfo.matrix$G+ sinfo.matrix$GH+sinfo.matrix$GR+sinfo.matrix$L+sinfo.matrix$O+sinfo.matrix$S+sinfo.matrix$V
+sinfo.matrix$radius <- sqrt(sqrt(sqrt(sinfo.matrix$total)))*2+1
+sinfo.matrix$long <- c(133,-55,109,10,-5,20,12,110,20,-101) #设置饼图位置，这里要手动调试，注意UK
+sinfo.matrix$lat <- c(-25,-10.4,30,55,55,60,54,66,64,38)
+#sinfo.matrix$long <- c(0,15,30,45,60,85,100,115,130,155) #设置饼图位置，这里要手动调试，注意UK
+#sinfo.matrix$lat <- c(100,100,100,100,100,100,100,100,100,100)
+
+```
+
+##ggplot画图
+```{r}
+library(baidumap)
+library(ggplot2)  
+library(dplyr)  
+library(ggthemes)
+library(scatterpie)
+library(ggnewscale)
+world <- map_data("world")
+world <- world[world$region != "Antarctica",] # 剔除南极洲
+piecol<-c("#e5b751","#fb9968", "#f15642", "#c04851" ,"#d276a3", "#e2c17c", "#867e76")   #设置饼图颜色
+#smap <- merge(world[which(world$region%in%dat$region),c(1,2,3,5)],dat,by="region")
+smap <- left_join(world,dat,by="region")
+m <- ggplot(smap, aes(x = long, y = lat, group = group)) + geom_polygon(aes(fill = MRate))+ scale_fill_gradientn(
+    colours = color,
+    values = scales::rescale(c(0.1, 1, 10, 100,1000,10000)), 
+    labels = scales::comma, 
+    breaks = c( 0.1, 1, 10, 100,1000,10000)
+  )+geom_path(col="White")
+
+m <- m+theme( 
+    panel.background = element_rect(fill = "White"), 
+    plot.background = element_rect(fill = "White"), 
+    #legend.position = c(.18), 
+    legend.background = element_blank(), 
+    legend.key = element_blank()
+  ) + guides(fill = guide_legend(reverse = T))
+  
+m <- m + new_scale("fill") + geom_scatterpie(aes(x=long,y=lat,group=V1,r=radius),data=sinfo.matrix,cols = c("G","GH","GR","L","O","S","V"),color=NA)+scale_fill_manual(values = piecol) + coord_equal() 
+```
+
+
+###-----------------test---------------###
+
+##1.draw map
+```{r,include=FALSE}
+cnty<-dat$Area[match(map("world",plot=F)$names,dat$Area)]
+colormatched<-dat$color[match(cnty,dat$Area)]
+par(mar=c(1,1,2,1)+2)
+aa<-map("world", fill = TRUE,col = color[colormatched],resolution = 0,lty=1)
+map(col="white",fill=F,add=T,lty= 0.01,cex=0.001)
+legend("right", leg.txt, horiz = F, fill = color, cex=0.4)
+#ggsave(aa, width=3,height=6,file=paste0("C:/Users/32601/Desktop/",tag,".pie.plot.pdf"))
+```
+
+##2.draw pie
+```{r,include=FALSE}
+plotPie <- function(ct){
+  tag <- ct
+  ct<-gtinfo%>%filter(V1==ct)
+  ct<-ct[order(ct$V2,decreasing = TRUE),]
+  label <- as.vector(ct$V2)
+  #label <- paste(label, "(",round(USA$V3/sum(USA$V3)*100,2),"%)",seq="")
+  pcolor=brewer.pal(length(ct$V1),"Set3")
+  aa<-ggplot(ct,aes(x="",y=V3,fill=V2))+geom_bar(stat = "identity", width = 0.1) +    
+    coord_polar(theta = "y") + 
+    labs(x = "", y = "", title = "") +
+    scale_fill_manual(values=c("V"="#edc3ae","S"="#ec9bad","O"="#f7da94","L"="#f2cac9","GR"="#dad4cb","GH"="#f9e9cd","G"="#dfecd5")) +  
+    theme(axis.ticks = element_blank()) + 
+    theme(legend.position = "none") + 
+    theme(axis.text.x = element_blank()) + 
+    theme(panel.grid=element_blank()) +    
+    theme(panel.border=element_blank())  
+  #scale_fill_discrete(breaks = USA$V2, labels = label) 
+  
+  ggsave(aa, width=1,height=1,file=paste0("C:/Users/32601/Desktop/COVIDplot/",tag,".pie.plot.pdf"))
+}
+```
