@@ -54,3 +54,96 @@ sinfo.matrix$lat <- c(-24,-10,32,100,100,100,100,20,60,100,39)
 #sinfo.matrix$lat <- c(100,100,100,100,100,100,100,100,100,100)
 
 ```
+
+##ggplot画图
+```{r}
+library(ggplot2)  
+library(dplyr)  
+library(ggthemes)
+library(scatterpie)
+library(ggnewscale)
+world <- map_data("world")
+world <- world[world$region != "Antarctica",] # 剔除南极洲
+piecol <- c("#edaf26","#fb9968", "#f15642", "#c04851" ,"#d276a3", "#f5e6a9", "#867e76")   #设置饼图颜色
+#smap <- merge(world[which(world$region%in%dat$region),c(1,2,3,5)],dat,by="region")
+smap <- left_join(world,dat,by="region")
+
+
+m <- ggplot(smap, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(aes(fill = MRate))+ scale_fill_gradientn(
+    colours = color,
+    values = scales::rescale(c(0.1, 1, 10, 100,1000,10000)), 
+    labels = scales::comma, 
+    breaks = c( 0.1, 1, 10, 100,1000,10000)
+  ) + geom_path(col="White")
+
+m <- m+theme( 
+    panel.background = element_rect("White"), 
+    panel.grid = element_blank(),
+    plot.background = element_rect(), 
+    #legend.position = c(-5,-5), 
+    legend.position = "left",
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    legend.background = element_blank(), 
+    #legend.box = "horizontal",
+    legend.text = element_text(size = 70),
+    legend.title = element_text(size = 70),
+    legend.key.size = unit(5, "lines"),
+    legend.key = element_blank()
+  ) + guides(fill = guide_legend(reverse = T))
+  
+m <- m + new_scale("fill") + 
+  geom_scatterpie(
+    aes(x=long,y=lat,group=V1,r=radius),
+    data=sinfo.matrix,
+    cols = c("G","GH","GR","L","O","S","V"),color=NA) +
+  scale_fill_manual(values = piecol) + 
+  coord_equal()
+
+#m <- m+geom_scatterpie_legend(sinfo.matrix$radius,x=-115,y=-50, n=3, labeller=function(x) ceiling(((x-1)/2)^8))
+
+m
+ggsave(m, width=49,height=27,file=("./COVID-19globeMapCombinePie.plot.pdf"))
+ggsave(m, width=50,height=40,file=("./tmp.pdf"),limitsize = FALSE)
+
+```
+
+
+###-----------------test---------------###
+
+##1.draw map
+```{r,include=FALSE}
+cnty<-dat$Area[match(map("world",plot=F)$names,dat$Area)]
+colormatched<-dat$color[match(cnty,dat$Area)]
+par(mar=c(1,1,2,1)+2)
+aa<-map("world", fill = TRUE,col = color[colormatched],resolution = 0,lty=1)
+map(col="white",fill=F,add=T,lty= 0.01,cex=0.001)
+legend("right", leg.txt, horiz = F, fill = color, cex=0.4)
+#ggsave(aa, width=3,height=6,file=paste0("C:/Users/32601/Desktop/",tag,".pie.plot.pdf"))
+```
+
+##2.draw pie
+```{r,include=FALSE}
+plotPie <- function(ct){
+  tag <- ct
+  ct <- gtinfo%>%filter(V1==ct)
+  ct <- ct[order(ct$V2,decreasing = TRUE),]
+  label <- as.vector(ct$V2)
+  #label <- paste(label, "(",round(USA$V3/sum(USA$V3)*100,2),"%)",seq="")
+  pcolor=brewer.pal(length(ct$V1),"Set3")
+  aa <- ggplot(ct,aes(x="",y=V3,fill=V2))+geom_bar(stat = "identity", width = 0.1) +    
+    coord_polar(theta = "y") + 
+    labs(x = "", y = "", title = "") +
+    scale_fill_manual(values=c("V"="#edc3ae","S"="#ec9bad","O"="#f7da94","L"="#f2cac9","GR"="#dad4cb","GH"="#f9e9cd","G"="#dfecd5")) +  
+    theme(axis.ticks = element_blank()) + 
+    theme(legend.position = "none") + 
+    theme(axis.text.x = element_blank()) + 
+    theme(panel.grid=element_blank()) +    
+    theme(panel.border=element_blank())  
+  #scale_fill_discrete(breaks = USA$V2, labels = label) 
+  
+  ggsave(aa, width=1,height=1,file=paste0("C:/Users/32601/Desktop/COVIDplot/",tag,".pie.plot.pdf"))
+}
+```
