@@ -16,5 +16,5 @@
 > * 随机森林分类器  randomForestFunctions.R
 > * 
 
-5. 地图
+5. 地图 covid-19
 >* 地图与饼图的组合图 
